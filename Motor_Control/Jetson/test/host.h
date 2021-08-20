@@ -19,11 +19,8 @@
 #define HOST_SERIAL_DEV_DIR		"/dev/serial/by-id/"
 #define HOST_BAUDRATE       	B1000000		// Serial baudrate
 #define DRIVE_RATIO 			8.0 		// Drive ratio of motor gear box
-#define SEND_SIZE 5
-#define STEP_SIZE  3
-#define BUFFER_SIZE 15
-float desired_pos[MOTOR_NUM] = {0}; // The deisred speed
-float motor_mode;
+
+float desired_pos[MOTOR_NUM]; // The deisred speed
 
 // Teensy->host communication data structure
 // sizeof(ESCPID_comm)=64 to match USB 1.0 buffer size
@@ -42,7 +39,6 @@ typedef struct {
 // sizeof(RPi_comm)=64 to match USB 1.0 buffer size
 typedef struct {
   float    comd[MOTOR_NUM];        		// Desired Speed, rad/s
-  float    motor_mode[1];
 } Jetson_comm_struct_t;
 
 Teensycomm_struct_t teensy_comm;  // A data struct received from Teensy
@@ -143,7 +139,7 @@ int Host_init_port(uint32_t serial_nb)
 	// Initialize corresponding data structure
 	for (int i = 0; i < MOTOR_NUM; ++i)
 		jetson_comm.comd[i] = 0.0;
-	jetson_comm.motor_mode[0] = 0.0;
+
 	/* Save current port settings */
 	tcgetattr(check_fd, &Host_oldtio);
 
@@ -204,7 +200,7 @@ int Host_comm_update(uint32_t serial_nb,
 	// Update output data structue
 	for (int i = 0; i < MOTOR_NUM; i++)
 		jetson_comm.comd[i] = desired_pos[i];
-	jetson_comm.motor_mode[0]=motor_mode;
+
 	// Send output structure
 	res = write(Host_fd, &jetson_comm, sizeof(jetson_comm));
 	if (res < 0)

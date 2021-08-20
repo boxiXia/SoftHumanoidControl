@@ -23,6 +23,7 @@ typedef struct {
 // Host->teensy communication data structure
 typedef struct {
   float    comd[MOTOR_NUM];            // Desired position, rad
+  float    motor_mode[1];
 } Jetson_comm_struct_t;
 
 struct Quaternion {
