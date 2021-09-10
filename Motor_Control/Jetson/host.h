@@ -140,10 +140,7 @@ int Host_init_port(uint32_t serial_nb)
 	Host_fd = check_fd;
 	strncpy(Host_devname, portname, PATH_MAX);
 
-	// Initialize corresponding data structure
-	for (int i = 0; i < MOTOR_NUM; ++i)
-		jetson_comm.comd[i] = 0.0;
-	jetson_comm.motor_mode[0] = 0.0;
+
 	/* Save current port settings */
 	tcgetattr(check_fd, &Host_oldtio);
 

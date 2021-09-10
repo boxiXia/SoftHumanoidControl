@@ -153,9 +153,12 @@ public:
 
 int main()
 {
+	// Initialize corresponding data structure
 	for (int i = 0; i < MOTOR_NUM; ++i)
 		desired_pos[i] = 0.0;
 	motor_mode=0; // 0:position control
+
+
 	Teensycomm_struct_t *comm;
 	int ret;
 

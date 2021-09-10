@@ -8,6 +8,11 @@ sudo g++ ./uart_905_demo.cpp -o imu.out -pthread
 ./imu.out
 ```
 
+# Display Detected System’s Serial
+```
+dmesg | grep tty
+```
+
 # Common problem
 ## Serial port terminal > Cannot open /dev/ttyS0: Permission denied
 First check if you are a member of that group:
