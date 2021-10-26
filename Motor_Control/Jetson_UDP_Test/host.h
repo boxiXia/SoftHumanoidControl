@@ -17,7 +17,6 @@
 #define HOST_DEV_SERIALLG		10				// Max length of a serial number
 #define HOST_SERIAL_DEV_DIR		"/dev/serial/by-id/"
 #define HOST_BAUDRATE       	B1000000		// Serial baudrate
-#define DRIVE_RATIO 			8.0 		// Drive ratio of motor gear box
 
 
 // Teensy->host communication data structure

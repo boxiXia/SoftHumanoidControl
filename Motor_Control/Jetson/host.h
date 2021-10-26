@@ -2,23 +2,21 @@
 #define __HOST_H
 
 #define MOTOR_NUM				12			// Number of ESCs
-#define USB_UART_SPEED     		1000000		// Baudrate of the teeensy USB serial link
 #define HOST_ERROR_FD         	-1			// Non existant file descriptor
 #define HOST_ERROR_DEV        	-2			// Non existant serial device
 #define HOST_ERROR_WRITE_SER  	-3			// Write error on serial
 #define HOST_ERROR_BAD_PK_SZ  	-4			// Bad incoming packet size error
 
-//#define  HOST_MODEMDEVICE		"usb-Teensyduino_USB_Serial_8784100-if00"
 #define HOST_MODEMDEVICE    	"/dev/ttyACM0"	// Name of USB port
 
 // Serial number of the teensy, check this number by using terminal, 
 // input: cd /dev/serial/by-id/
-// then : ls
+// then : ls -l
 #define HOST_DEV_SERIALNB		8784100			
 #define HOST_DEV_SERIALLG		10				// Max length of a serial number
 #define HOST_SERIAL_DEV_DIR		"/dev/serial/by-id/"
 #define HOST_BAUDRATE       	B1000000		// Serial baudrate
-#define DRIVE_RATIO 			8.0 		// Drive ratio of motor gear box
+
 #define SEND_SIZE 5
 #define STEP_SIZE  3
 #define BUFFER_SIZE 15
@@ -34,10 +32,6 @@ typedef struct {
   float    joint_pos[MOTOR_NUM];      // Motors rotation angle
   float    joint_vel[MOTOR_NUM];     // Motors rad/s
   float	   joint_cur[MOTOR_NUM];     // Motors torque
-  float    acc[3];						  // Acceleration in X Y Z direction, m/s^2
-  float    gyr[3];						  // Gyroscope in X Y Z direction, deg/s
-  float    mag[3];             // Magnetometer in X Y Z, uT
-  float    euler[3];
   float    foot_force[4];
   float    timestamps;
 } Teensycomm_struct_t;
@@ -253,6 +247,8 @@ int Host_comm_update(uint32_t serial_nb,
 	return 0;
 }
 
+
+/*--------------------------------------------------------*/
 inline int uart_open(int fd, const char *pathname) {
   fd = open(pathname, O_RDWR | O_NOCTTY);
   if (-1 == fd) {
@@ -291,19 +287,19 @@ int uart_set(int fd, int nSpeed, int nBits, char nEvent, int nStop) {
   switch (nEvent) // parity check
   {
   case 'o':
-  case 'O': // odd
+  case 'O': // odd parity
     newtio.c_cflag |= PARENB;
     newtio.c_cflag |= PARODD;
     newtio.c_iflag |= (INPCK | ISTRIP);
     break;
   case 'e':
-  case 'E': // even
+  case 'E': // even parity
     newtio.c_iflag |= (INPCK | ISTRIP);
     newtio.c_cflag |= PARENB;
     newtio.c_cflag &= ~PARODD;
     break;
   case 'n':
-  case 'N': // none
+  case 'N': // none parity
     newtio.c_cflag &= ~PARENB;
     break;
   default:

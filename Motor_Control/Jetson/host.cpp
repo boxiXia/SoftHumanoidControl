@@ -315,18 +315,10 @@ int main()
 			fprintf(stderr, "Error %d in Host_comm_update.\n", ret);
 			break;
 		}
-		// After receiving the data from Teensy, save it into class msg_to_pc
 
-		// ret = imu.recv(r_buf, 44);
-		// for (int i = 0; i < ret; i++) {
-		// ParseData(r_buf[i]);
-		// //usleep(1000);
-		// }
-		//std:: thread recv_thread(&get_imu_data,&get_imu_data); 
-		get_imu_data(imu);
+		get_imu_data(imu);//TODO.....
 
 		// data_send.timestamps = comm->timestamps;
-
 
 		unsigned long milliseconds_since_epoch = 
 		std::chrono::duration_cast<std::chrono::microseconds>
@@ -352,10 +344,6 @@ int main()
 			data_send.acc[i] = a[i];
 			data_send.gyr[i] = w[i];
 			data_send.euler[i] = Angle[i];
-
-			//std::cout<<data_send.euler[0]<< '\n';
-			//std::cout<<data_send.joint_cur[0]<< '\n';
-			//printf("%f\t", msg_to_pc.euler[i]);
 		}
 		//std::cout<<Angle[0]<<" "<<Angle[1]<<" "<<Angle[2]<<'\n';
 		//printf("\n");
