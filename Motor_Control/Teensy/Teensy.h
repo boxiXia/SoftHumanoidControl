@@ -17,6 +17,7 @@ typedef struct {
   float    gyr[3];             // Gyroscope in X Y Z direction, deg/s
   float    mag[3];             // Magnetometer in X Y Z, uT
   float    euler[3];
+  float    foot_force[4];
   float    timestamps;
 } Teensycomm_struct_t;
 

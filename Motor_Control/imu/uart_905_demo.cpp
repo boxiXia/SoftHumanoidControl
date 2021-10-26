@@ -230,7 +230,7 @@ int main() {
     ret = imu.recv(r_buf, 44);
     for (int i = 0; i < ret; i++) {
       ParseData(r_buf[i]);
-      usleep(1000);
+      //usleep(1000);
     }
   }
   imu.close();

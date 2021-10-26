@@ -77,11 +77,23 @@ const float magn_ellipsoid_center[3] = {-26.1968, 0.416948, -25.6187};
 const float magn_ellipsoid_transform[3][3] = {{0.878318, 0.0501339, -0.0246819}, {0.0501339, 0.911703, -0.0155113}, {-0.0246819, -0.0155113, 0.985244}};
 
 
-float accel[3];  // Actually stores the NEGATED acceleration (equals gravity, if board not moving).
-float accel_b[3];
-float magnetom[3];
-float magnetom_tmp[3];
-float gyro[3];
+float accel[3]={0};  // Actually stores the NEGATED acceleration (equals gravity, if board not moving).
+float accel_b[3]={0};
+float magnetom[3]={0};
+float magnetom_tmp[3]={0};
+float gyro[3]={0};
+float foot_force[4];
+
+//............foot sensor
+const int pin_left_forefoot = 16;
+const int pin_left_backheel = 17;
+const int pin_right_forefoot = 20;
+const int pin_right_backheel = 21;
+
+bool left_touch = 0;
+bool right_touch = 0;
+const int force_threshold = 128;
+//................
 
 Quaternion qua;
 EulerAngles eul;
@@ -135,6 +147,7 @@ void compensate_sensor_errors() {
 /*********************************************************/
 
 void Motor_Init() {
+
   // Motor position initial CAN bus command
   // All motors rotate to position 0 rad
   msg_send.buf[0] = 0xA3; //CAN bus position command ID
@@ -275,7 +288,10 @@ void Jetson_Teensy () {
       teensy_comm.joint_vel[i] = joint_vel[i];
       teensy_comm.joint_cur[i] = joint_cur[i];
     }
-
+    //........
+    // teensy_comm.joint_pos[7]  = joint_pos[7]-3.1415926/12;
+    // teensy_comm.joint_pos[10]  = joint_pos[10]+3.1415926/12;
+    //..............
     // Read data from IMU(MPU9250)
    // Save acceleration (m/s^2) of IMU into struct teensy_comm
     teensy_comm.acc[0] = accel[0];
@@ -291,11 +307,19 @@ void Jetson_Teensy () {
     teensy_comm.mag[1] = magnetom[1];
     teensy_comm.mag[2] = magnetom[2];
 
-    teensy_comm.euler[0] = eul.roll_e;
-    teensy_comm.euler[1] = eul.pitch_e;
-    teensy_comm.euler[2] = eul.yaw_e;
+    teensy_comm.euler[0] = 0;//eul.roll_e;
+    teensy_comm.euler[1] = 0;//eul.pitch_e;
+    teensy_comm.euler[2] = 0;//eul.yaw_e;
 
     teensy_comm.timestamps = time_now / 1000000.0;
+
+    //...............foot sensor
+    teensy_comm.foot_force[0]  = float(analogRead(pin_left_forefoot))/1023.0*5.0; //pin16:v1
+    teensy_comm.foot_force[1] = float(analogRead(pin_left_backheel))/1023.0*5.0; //pin21:v4
+    teensy_comm.foot_force[2] = float(analogRead(pin_right_forefoot))/1023.0*5.0;//pin17:v2
+    teensy_comm.foot_force[3]= float(analogRead(pin_right_backheel))/1023.0*5.0;//pin20:v3
+    
+    //...............
     // Send data structure teensy_comm to Jetson
     Serial.write(ptout, sizeof(teensy_comm));
 
@@ -314,11 +338,11 @@ void setup() {
   digitalWrite(13, HIGH);
 
 
-  sox.begin_I2C();
-  sox.setAccelRange(LSM6DS_ACCEL_RANGE_4_G);
-  sox.setGyroRange(LSM6DS_GYRO_RANGE_500_DPS );
-  sox.setAccelDataRate(LSM6DS_RATE_52_HZ);
-  sox.setGyroDataRate(LSM6DS_RATE_52_HZ);
+  // sox.begin_I2C();
+  // sox.setAccelRange(LSM6DS_ACCEL_RANGE_4_G);
+  // sox.setGyroRange(LSM6DS_GYRO_RANGE_500_DPS );
+  // sox.setAccelDataRate(LSM6DS_RATE_52_HZ);
+  // sox.setGyroDataRate(LSM6DS_RATE_52_HZ);
 
   lis.begin_I2C();          // hardware I2C mode, can pass in address & alt Wire
   lis.setPerformanceMode(LIS3MDL_MEDIUMMODE);
@@ -328,7 +352,7 @@ void setup() {
   lis.setIntThreshold(500);
   lis.configInterrupt(false, false, true, true, false, true); // enabled!
   
-  sensor_init();
+  //sensor_init();
   digitalWrite(13, LOW);
 
   CAN_F.begin();
@@ -345,29 +369,29 @@ void setup() {
 }
 
 void loop() {
-
-  read_sensors();
+  
+  //read_sensors();
   
   Jetson_Teensy ();
   
-  compensate_sensor_errors();
+  //compensate_sensor_errors();
   
   time_now = (float)micros();
   delta_t = (time_now - time_former) / 1000000.0;
   time_former = time_now;
 
-  MadgwickQuaternionUpdate(accel[0], accel[1], accel[2],
-                           gyro[0], gyro[1], gyro[2],
-                           magnetom[0], magnetom[1], magnetom[2], delta_t);
-  qua.w = q[0];
-  qua.x = q[1];
-  qua.y = q[2];
-  qua.z = q[3];
-  eul = ToEulerAngles(qua);
-  eul.yaw_e += 0.22; // 0.22 rad is the Magnetic Declination in New York
-  if (eul.yaw_e > PI) {
-    eul.yaw_e -= 2 * PI;
-  }
+  // MadgwickQuaternionUpdate(accel[0], accel[1], accel[2],
+  //                          gyro[0], gyro[1], gyro[2],
+  //                          magnetom[0], magnetom[1], magnetom[2], delta_t);
+  // qua.w = q[0];
+  // qua.x = q[1];
+  // qua.y = q[2];
+  // qua.z = q[3];
+  // eul = ToEulerAngles(qua);
+  // eul.yaw_e += 0.22; // 0.22 rad is the Magnetic Declination in New York
+  // if (eul.yaw_e > PI) {
+  //   eul.yaw_e -= 2 * PI;
+  // }
 
   
   // for (int i = 0; i < MOTOR_NUM; ++i) {
@@ -387,6 +411,12 @@ void loop() {
   if(motor_mode==0){
     for (int i = 0; i < MOTOR_NUM; ++i) {
       joint_pos_desired[i] = jetson_comm.comd[i];
+    }
+//...............
+  //joint_pos_desired[1] = jetson_comm.comd[1]+3.1415926/12;
+  //joint_pos_desired[2] = jetson_comm.comd[2]-3.1415926/3;
+//..................
+    for (int i = 0; i < MOTOR_NUM; ++i) {
       if (joint_pos_desired[i] > joint_upper_limit[i])
         joint_pos_desired[i] = joint_upper_limit[i];
       else if (joint_pos_desired[i] < joint_lower_limit[i])
@@ -396,6 +426,13 @@ void loop() {
   else if(motor_mode==1){
     for (int i = 0; i < MOTOR_NUM; ++i) {
       joint_pos_desired[i] = jetson_comm.comd[i];
+
+    }
+//...................
+  //joint_pos_desired[1] = jetson_comm.comd[1]+3.1415926/12;
+  //joint_pos_desired[2] = jetson_comm.comd[2]-3.1415926/3;
+//......................
+    for (int i = 0; i < MOTOR_NUM; ++i) {
       if (teensy_comm.joint_pos[i] > joint_upper_limit[i]){
         if (joint_pos_desired[i]>0){
           joint_pos_desired[i] = 0;
