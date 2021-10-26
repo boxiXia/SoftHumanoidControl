@@ -272,11 +272,7 @@ int main()
 	Teensycomm_struct_t *comm;
 	int ret;
 
-	// Initialize serial port
-	if (Host_init_port(HOST_DEV_SERIALNB)){
-		fprintf(stderr, "Error initializing serial port.\n");
-		exit(-1);
-	}
+
 	UdpReceiver udp_receiver;
 	std::thread recv_thread(&UdpReceiver::run,&udp_receiver); // udp receiving in a separate thread
 	printf("\ninitialized\n");
@@ -294,11 +290,19 @@ int main()
 	inet_pton(AF_INET, PC_IP_ADDR, &client_send.sin_addr); // Address
 	bind(sock_send, (struct sockaddr *)&client_send, sock_length_send);
 
-	Serial imu("/dev/ttyUSB0");
-  	imu.uartSet(BAUD, 8, 'N', 1);
+
+	/*********************Serial for IMU *********************/
+	Serial imu {"/dev/ttyUSB0"};
+	//        baudrate,...
+  	imu.uartSet(460800, 8, 'N', 1);
   	char r_buf[1024];
 
-	//UdpDataSend msg_send;			// For holding the sent class
+	/********************* Serial for teensy****************************/
+	Serial teensy_serial {"/dev/ttyACM0"};
+	teensy_serial.uartSet(1000000, 8, 'N', 1);
+
+
+
 	/******************************************************************/
 	while (1){
 		if(udp_receiver.msg_queue.size()>0){
@@ -309,12 +313,17 @@ int main()
 			motor_mode=recv.motor_mode;
 		}
 		//printf("%f\t", desired_pos[0]);
-		// Serial exchange with teensy
-		if ((ret = Host_comm_update(HOST_DEV_SERIALNB, &comm)))
-		{
-			fprintf(stderr, "Error %d in Host_comm_update.\n", ret);
-			break;
-		}
+
+
+		// Update output data structue
+		for (int i = 0; i < MOTOR_NUM; i++)
+			jetson_comm.comd[i] = desired_pos[i];
+		jetson_comm.motor_mode[0]=motor_mode;
+		// send to teensy
+		teensy_serial.sendStruct(jetson_comm);
+		// receive from teensy
+		teensy_serial.recvStruct(&comm);
+
 
 		get_imu_data(imu);//TODO.....
 
@@ -345,7 +354,7 @@ int main()
 			data_send.gyr[i] = w[i];
 			data_send.euler[i] = Angle[i];
 		}
-		//std::cout<<Angle[0]<<" "<<Angle[1]<<" "<<Angle[2]<<'\n';
+		// std::cout<<Angle[0]<<" "<<Angle[1]<<" "<<Angle[2]<<'\n';
 		//printf("\n");
 		eulerTomatrix(Angle[0],Angle[1],Angle[2],imu_transform);
 
@@ -385,11 +394,12 @@ int main()
 		}
 	}
 	
-	Host_release_port(HOST_DEV_SERIALNB);
 
 	udp_receiver.RUNNING = false;
 	if (recv_thread.joinable()){recv_thread.join();}
 
 	imu.close();
+	teensy_serial.close();
+
 	return 0;
 }
