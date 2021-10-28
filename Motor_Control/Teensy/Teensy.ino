@@ -100,7 +100,7 @@ void Motor_Init()
       }
     }
   }
-  delay(400);
+  delay(400); //TODO... CHECK WHAT THIS IS
 }
 
 void processMotorData(int id)
@@ -155,9 +155,7 @@ void Angle_Control_Loop(int motor_id, float pos_command, float motor_mode)
     msg_send.buf[4] = *(uint8_t *)(&pos);
     msg_send.buf[5] = *((uint8_t *)(&pos) + 1);
     msg_send.buf[6] = *((uint8_t *)(&pos) + 2);
-    ;
     msg_send.buf[7] = *((uint8_t *)(&pos) + 3);
-    ;
   }
   else
   {
@@ -169,9 +167,7 @@ void Angle_Control_Loop(int motor_id, float pos_command, float motor_mode)
     msg_send.buf[4] = *(uint8_t *)(&pos);
     msg_send.buf[5] = *((uint8_t *)(&pos) + 1);
     msg_send.buf[6] = *((uint8_t *)(&pos) + 2);
-    ;
     msg_send.buf[7] = *((uint8_t *)(&pos) + 3);
-    ;
   }
 
   if (joint_can_lane[motor_id] == 0)

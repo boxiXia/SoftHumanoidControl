@@ -201,6 +201,7 @@ public:
     }
   }
 
+
 template <class DataStruct>
 int sendStruct(DataStruct data){
   int length = write(fd, &data, sizeof(DataStruct));
@@ -210,10 +211,10 @@ int sendStruct(DataStruct data){
 }
 
 template <class DataStruct>
-int recvStruct(DataStruct** _data){
+void recvStruct(DataStruct& data){
 	int res = 0;
 	
-  DataStruct data;  // A data struct received from Teensy
+  // DataStruct data;  // A data struct received from Teensy
   uint8_t *pt_in = (uint8_t *)(&data);
 
   do{
@@ -237,15 +238,15 @@ int recvStruct(DataStruct** _data){
 		while ((ret = read(fd, pt_in, 1)))
 			if (ret <= 0)
 				break;
-		return -4; //TODO...
+		// return -4; //TODO...
 	}
 
   // Return pointer to _data
-	*_data = &data;
+	// *_data = &data;
 
-  return 0;
+  // return 0;
+  // return data;
 }
-
 
 };
 

@@ -269,7 +269,7 @@ int main()
 	motor_mode=0; // 0:position control
 
 
-	Teensycomm_struct_t *comm;
+	Teensycomm_struct_t comm;
 	int ret;
 
 
@@ -322,8 +322,11 @@ int main()
 		// send to teensy
 		teensy_serial.sendStruct(jetson_comm);
 		// receive from teensy
-		teensy_serial.recvStruct(&comm);
+		
+		teensy_serial.recvStruct(comm);
 
+		// Teensycomm_struct_t comm_ = teensy_serial.recvStruct<Teensycomm_struct_t>();
+		// comm = &comm_;
 
 		get_imu_data(imu);//TODO.....
 
@@ -338,23 +341,25 @@ int main()
 		for (int j = 0; j < MOTOR_NUM; ++j)
 		{
 			// Angle of motors:
-			data_send.joint_posraw[j] = comm->joint_pos[j];
+			data_send.joint_posraw[j] = comm.joint_pos[j];
 			// Speed of motors:
-			data_send.joint_vel[j] = comm->joint_vel[j];
+			data_send.joint_vel[j] = comm.joint_vel[j];
 			// Angle of motors:
-			data_send.joint_pos[j*2] = std::cos(comm->joint_pos[j]);
-			data_send.joint_pos[j*2+1] = std::sin(comm->joint_pos[j]);
+			data_send.joint_pos[j*2] = std::cos(comm.joint_pos[j]);
+			data_send.joint_pos[j*2+1] = std::sin(comm.joint_pos[j]);
 			// Current of motors:
-			data_send.joint_cur[j] = comm->joint_cur[j];
+			data_send.joint_cur[j] = comm.joint_cur[j];
 		}
-		//std::cout<<comm->joint_pos[7]<<" "<<comm->joint_pos[10]<< " "<<comm->joint_pos[0]<<'\n';
+		//std::cout<<comm->joint_cur[1]<<" "<<comm->joint_cur[1]<< " "<<comm->joint_cur[2]<<'\n';
 		for (int i = 0; i < 3; ++i){
 			// msg_to_pc.mag[i] = comm->mag[i];
 			data_send.acc[i] = a[i];
 			data_send.gyr[i] = w[i];
 			data_send.euler[i] = Angle[i];
 		}
-		// std::cout<<Angle[0]<<" "<<Angle[1]<<" "<<Angle[2]<<'\n';
+		// std::cout<<data_send.joint_cur[0]<<" "<<data_send.joint_cur[1]<< " "<<data_send.joint_cur[2]<<'\n';
+		
+		//std::cout<<Angle[0]<<" "<<Angle[1]<<" "<<Angle[2]<<'\n';
 		//printf("\n");
 		eulerTomatrix(Angle[0],Angle[1],Angle[2],imu_transform);
 
@@ -370,9 +375,14 @@ int main()
 		// std::cout<<Rw_r[2][0]<<" "<<Rw_r[2][1]<<" "<<Rw_r[2][2]<<'\n';
 
 		// Foot sensor data process............
-		leftfoot_mass, rightfoot_mass=convert_4voltages_to_mass(comm->foot_force[0],comm->foot_force[2],comm->foot_force[1],comm->foot_force[3]);
-		data_send.foot_force[0]=leftfoot_mass;
-		data_send.foot_force[1]=rightfoot_mass;
+		leftfoot_mass, rightfoot_mass=convert_4voltages_to_mass(comm.foot_force[0],comm.foot_force[2],comm.foot_force[1],comm.foot_force[3]);
+		// on/off contact switch
+		data_send.foot_force[0]= leftfoot_mass>0.5? 1:0;
+		data_send.foot_force[1]= rightfoot_mass>0.5? 1:0;
+
+
+		// data_send.foot_force[0]=leftfoot_mass;
+		// data_send.foot_force[1]=rightfoot_mass;
 		//std::cout<<comm->foot_force[0]<<" "<<comm->foot_force[2]<<" "<<comm->foot_force[1]<<" "<<comm->foot_force[3]<<'\n';
 		//std::cout<<leftfoot_mass<<" "<<rightfoot_mass<<'\n';
 		//.................
