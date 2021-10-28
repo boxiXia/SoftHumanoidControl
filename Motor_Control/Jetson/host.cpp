@@ -357,7 +357,7 @@ int main()
 			data_send.gyr[i] = w[i];
 			data_send.euler[i] = Angle[i];
 		}
-		// std::cout<<data_send.joint_cur[0]<<" "<<data_send.joint_cur[1]<< " "<<data_send.joint_cur[2]<<'\n';
+		//std::cout<<data_send.joint_cur[2]<<'\n';
 		
 		//std::cout<<Angle[0]<<" "<<Angle[1]<<" "<<Angle[2]<<'\n';
 		//printf("\n");
@@ -383,8 +383,8 @@ int main()
 
 		// data_send.foot_force[0]=leftfoot_mass;
 		// data_send.foot_force[1]=rightfoot_mass;
-		//std::cout<<comm->foot_force[0]<<" "<<comm->foot_force[2]<<" "<<comm->foot_force[1]<<" "<<comm->foot_force[3]<<'\n';
-		//std::cout<<leftfoot_mass<<" "<<rightfoot_mass<<'\n';
+		// std::cout<<comm.foot_force[0]<<" "<<comm.foot_force[2]<<" "<<comm.foot_force[1]<<" "<<comm.foot_force[3]<<'\n';
+		// std::cout<<leftfoot_mass<<" "<<rightfoot_mass<<'\n';
 		//.................
 
 		

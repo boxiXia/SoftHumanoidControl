@@ -100,14 +100,14 @@ void Motor_Init()
       }
     }
   }
-  delay(400); //TODO... CHECK WHAT THIS IS
+  //delay(400); //TODO... CHECK WHAT THIS IS
 }
 
 void processMotorData(int id)
 {
   // Receiving motor angle
   // Transfer hex number to rad
-  int rotor_pos_raw = 0; // Rotor position before devided by gear reduction
+  int16_t rotor_pos_raw = 0; // Rotor position before devided by gear reduction
   *(uint8_t *)(&rotor_pos_raw) = msg_recv.buf[6];
   *((uint8_t *)(&rotor_pos_raw) + 1) = msg_recv.buf[7];
   //TODO CHECK
@@ -122,16 +122,16 @@ void processMotorData(int id)
   joint_pos[id] = (rotor_pos[id] + r_num[id] * 2 * PI) / REDUCTION_RATIO;
 
   // Calculate shaft velocity [rad/s]
-  int rotor_vel_raw = 0;
+  int16_t rotor_vel_raw = 0;
   *(uint8_t *)(&rotor_vel_raw) = msg_recv.buf[4];
   *((uint8_t *)(&rotor_vel_raw) + 1) = msg_recv.buf[5];
   joint_vel[id] = (float)rotor_vel_raw * PI / (180.0 * REDUCTION_RATIO);
 
   // Calculate motor's current [A], -33A ~ 33A
-  int cur_raw = 0;
+  int16_t cur_raw = 0;
   *(uint8_t *)(&cur_raw) = msg_recv.buf[2];
   *((uint8_t *)(&cur_raw) + 1) = msg_recv.buf[3];
-  joint_cur[id] = (float)cur_raw * 33.0 / 2048.0; // 2048 refers to 33A
+  joint_cur[id] = (float)cur_raw* 33.0 / 2048.0; // 2048 refers to 33A
 }
 
 void Angle_Control_Loop(int motor_id, float pos_command, float motor_mode)
