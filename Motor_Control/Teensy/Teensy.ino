@@ -1,5 +1,16 @@
+#include <isotp.h>
 #include <FlexCAN_T4.h>
+#include <circular_buffer.h>
+#include <kinetis_flexcan.h>
+#include <imxrt_flexcan.h>
+#include <isotp_server.h>
+
+//#include <ArduinoSTL.h>
+
 #include "Teensy.h"
+// #define _USE_MATH_DEFINES
+ 
+#include <cmath>
 
 FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> CAN_F; // CAN bus for upper body motors
 FlexCAN_T4<CAN2, RX_SIZE_256, TX_SIZE_16> CAN_B; // CAN bus for lower body motors
@@ -22,12 +33,14 @@ float joint_vel[MOTOR_NUM] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 
 // Motor current [A]
 float joint_cur[MOTOR_NUM] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 
-float joint_upper_limit[MOTOR_NUM] = {2.5132742, 1.4279966, 1.5707964, 2.5132742, 1.4279966,
-                                      1.5707964, 0.7853982, 0.7853982, 1.5707964, 0.7853982,
-                                      1.9634954, 1.5707964};
-float joint_lower_limit[MOTOR_NUM] = {-2.5132742, -1.4279966, -1.5707964, -2.5132742, -1.4279966,
-                                      -1.5707964, -0.7853982, -1.9634954, -1.5707964, -0.7853982,
-                                      -0.7853982, -1.5707964};
+
+constexpr float pi = 3.14159265358979323846;
+
+//                                         0          1      2         3       4       5        6        7      8      9      10       11 
+float joint_lower_limit[MOTOR_NUM]    = {-pi/1.25, -pi/2, -pi/2,   -pi,      -pi/2,  -pi/2,  -pi/3,      0,  -pi/3, -pi/3,  -pi/2,  -pi/3};
+float joint_upper_limit[MOTOR_NUM]    = { pi/1.25,  pi/2,  pi/2,    pi/1.25,  pi/2,   pi/2,   pi/3,   pi/2,   pi/3,  pi/3,      0,   pi/3};
+float joint_axis_direction[MOTOR_NUM] = { 1,           1,     1,     1,          1,      1,      1,     -1,     -1,     1,     -1,     -1};
+
 
 float delta_t;                                                      // loop time difference
 Teensycomm_struct_t teensy_comm = {{}, {}, {}, {}, {}}; // For holding data sent to Jetson
@@ -63,8 +76,41 @@ const int force_threshold = 128;
 void Motor_Init()
 {
 
-  // Motor position initial CAN bus command
-  // All motors rotate to position 0 rad
+
+  // // Motor position initial CAN bus command
+  // // All motors rotate to position 0 rad
+  // msg_send.buf[0] = 0x19; //CAN bus position command ID
+  // msg_send.buf[1] = 0x00;
+  // msg_send.buf[2] = 0x00;
+  // msg_send.buf[3] = 0x00;
+  // msg_send.buf[4] = 0x00;
+  // msg_send.buf[5] = 0x00;
+  // msg_send.buf[6] = 0x00;
+  // msg_send.buf[7] = 0x00;
+
+  // msg_send.id = joint_can_addr[6];
+  // CAN_B.write(msg_send);
+  // while (true)
+  // {
+  //   if (CAN_B.read(msg_recv))
+  //   {
+  //     processMotorData(6);
+  //     break;
+  //   }
+  // }
+  // msg_send.id = joint_can_addr[9];
+  // CAN_B.write(msg_send);
+  // while (true)
+  // {
+  //   if (CAN_B.read(msg_recv))
+  //   {
+  //     processMotorData(9);
+  //     break;
+  //   }
+  // }
+  // Motors' IDs range from 0x141 to 0x146.
+  // CAN_F is connected to upper body motors(id: 0x141 to 0x146)
+  // CAN_B is connected to lower body motors(id: 0x141 to 0x146)
   msg_send.buf[0] = 0xA3; //CAN bus position command ID
   msg_send.buf[1] = 0x00;
   msg_send.buf[2] = 0x00;
@@ -73,10 +119,6 @@ void Motor_Init()
   msg_send.buf[5] = 0x00;
   msg_send.buf[6] = 0x00;
   msg_send.buf[7] = 0x00;
-
-  // Motors' IDs range from 0x141 to 0x146.
-  // CAN_F is connected to upper body motors(id: 0x141 to 0x146)
-  // CAN_B is connected to lower body motors(id: 0x141 to 0x146)
   for (int i = 0; i < MOTOR_NUM / 2; ++i)
   {
     msg_send.id = joint_can_addr[i];
@@ -119,25 +161,25 @@ void processMotorData(int id)
 
   // Calculate shaft angular position [rad]
   rotor_pos_prev[id] = rotor_pos[id];
-  joint_pos[id] = (rotor_pos[id] + r_num[id] * 2 * PI) / REDUCTION_RATIO;
+  joint_pos[id] = (rotor_pos[id] + r_num[id] * 2 * PI) / REDUCTION_RATIO * joint_axis_direction[id];
 
   // Calculate shaft velocity [rad/s]
   int16_t rotor_vel_raw = 0;
   *(uint8_t *)(&rotor_vel_raw) = msg_recv.buf[4];
   *((uint8_t *)(&rotor_vel_raw) + 1) = msg_recv.buf[5];
-  joint_vel[id] = (float)rotor_vel_raw * PI / (180.0 * REDUCTION_RATIO);
+  joint_vel[id] = (float)rotor_vel_raw * PI / (180.0 * REDUCTION_RATIO) * joint_axis_direction[id];
 
   // Calculate motor's current [A], -33A ~ 33A
   int16_t cur_raw = 0;
   *(uint8_t *)(&cur_raw) = msg_recv.buf[2];
   *((uint8_t *)(&cur_raw) + 1) = msg_recv.buf[3];
-  joint_cur[id] = (float)cur_raw* 33.0 / 2048.0; // 2048 refers to 33A
+  joint_cur[id] = (float)cur_raw* 33.0 / 2048.0 * joint_axis_direction[id]; // 2048 refers to 33A
 }
 
 void Angle_Control_Loop(int motor_id, float pos_command, float motor_mode)
 {
   // Convert motor shaft angle command [rad] to rotor angle command [degree]
-  pos_command = pos_command * 180.0 * REDUCTION_RATIO / PI;
+  pos_command = pos_command * 180.0 * REDUCTION_RATIO / PI * joint_axis_direction[motor_id];
   // see motor manual p12 (0xA3)
   int32_t pos = (int32_t)round(pos_command / 0.01);
 
@@ -223,10 +265,15 @@ void Jetson_Teensy()
     teensy_comm.timestamps = time_now / 1000000.0;
 
     //...............foot sensor
-    teensy_comm.foot_force[0] = float(analogRead(pin_left_forefoot)) / 1023.0 * 5.0;  //pin16:v1
-    teensy_comm.foot_force[1] = float(analogRead(pin_left_backheel)) / 1023.0 * 5.0;  //pin21:v4
-    teensy_comm.foot_force[2] = float(analogRead(pin_right_forefoot)) / 1023.0 * 5.0; //pin17:v2
-    teensy_comm.foot_force[3] = float(analogRead(pin_right_backheel)) / 1023.0 * 5.0; //pin20:v3
+    // teensy_comm.foot_force[0] = float(analogRead(pin_left_forefoot)) / 1023.0 * 5.0;  //pin16:v1
+    // teensy_comm.foot_force[1] = float(analogRead(pin_left_backheel)) / 1023.0 * 5.0;  //pin21:v4
+    // teensy_comm.foot_force[2] = float(analogRead(pin_right_forefoot)) / 1023.0 * 5.0; //pin17:v2
+    // teensy_comm.foot_force[3] = float(analogRead(pin_right_backheel)) / 1023.0 * 5.0; //pin20:v3
+    // from 0-1023, 5v, measure fixed resistor
+    teensy_comm.foot_force[0] = analogRead(pin_left_forefoot);  //pin16:v1
+    teensy_comm.foot_force[1] = analogRead(pin_left_backheel);  //pin21:v4
+    teensy_comm.foot_force[2] = analogRead(pin_right_forefoot); //pin17:v2 
+    teensy_comm.foot_force[3] = analogRead(pin_right_backheel); //pin20:v3
 
     //...............
     // Send data structure teensy_comm to Jetson

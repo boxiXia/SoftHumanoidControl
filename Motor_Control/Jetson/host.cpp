@@ -1,11 +1,14 @@
 /*****************host.cpp******************/
 // compile:
 // sudo g++ -pthread host.cpp
-// autorun: edit etc/rc.local:
+// autorun: edit /etc/rc.local:
 //			add: path_to_a.out &
 // run:
 // ./a.out
 /*******************************************/
+#define _USE_MATH_DEFINES
+#include <math.h>
+
 #include <fcntl.h>
 #include <termios.h>
 #include <string.h>
@@ -17,7 +20,6 @@
 #include <msgpack.hpp>
 #include <thread>
 #include <deque>
-#include <cmath>
 #include <chrono>
 #include "host.h"
 
@@ -27,33 +29,45 @@ constexpr char PC_IP_ADDR[] = "192.168.137.1";
 // constexpr char PC_IP_ADDR[] = "192.168.1.109";
 constexpr int UDP_BUFFER_SIZE = 1280;
 
-// orientation calculation
-float R_imuinverse[3][3] = 
-{{0.0466428 , -0.99876216,  0.01727997},
- {0.99714982,  0.0455266 , -0.06016285},
- {0.05930168,  0.02003687,  0.998039  }};
+constexpr int SEND_SIZE = 5;
+constexpr int STEP_SIZE = 3;
+constexpr int BUFFER_SIZE = SEND_SIZE * STEP_SIZE;
 
-float R[3][3] = 
-{{ 0, 0,-1},
- { 0, 1, 0},
- { 1, 0, 0}};
+static int ret;
 
-float imu_transform[3][3] = {0};
-float robot_transform[3][3] = {0};
-float Rw_r[3][3] = {0};
-float Rw_r1[3][3] = {0};
-float Rw_r2[3][3] = {0};
-float a[3], w[3], Angle[3], h[3];
+constexpr int MOTOR_NUM = 12;		// Number of ESCs
+float desired_pos[MOTOR_NUM] = {0}; // The deisred speed
+float motor_mode;
+
+// Teensy->host communication data structure
+// sizeof(ESCPID_comm)=64 to match USB 1.0 buffer size
+typedef struct
+{
+	float joint_pos[MOTOR_NUM]; // Motors rotation angle
+	float joint_vel[MOTOR_NUM]; // Motors rad/s
+	float joint_cur[MOTOR_NUM]; // Motors torque
+	int16_t foot_force[4];
+	float timestamps;
+} Teensycomm_struct_t;
+
+// Host->teensy communication data structure
+// sizeof(RPi_comm)=64 to match USB 1.0 buffer size
+typedef struct
+{
+	float comd[MOTOR_NUM]; // Desired Speed, rad/s
+	float motor_mode[1];
+} Jetson_comm_struct_t;
+
 // foot sensor ............
 float c3_func[3] = {-0.4079, 0.0269, 2.9743}; //pin16:left_forefoot
 float g3_func[3] = {-0.4278, 0.0167, 3.0961}; //pin17:left_backheel
 float e1_func[3] = {-0.3057, 0.0167, 3.1222}; //pin20:right_forefoot
 float a3_func[3] = {-0.3781, 0.0197, 3.0990}; //pin21:right_backheel
 
-int avg_size = 10; // number of analog readings to average
-float R_0 = 20000.0; // known resistor value in [ohms]
-float Vcc = 5.0; //supply voltage
-float leftfoot_mass = 0.0; //the mass on left foot
+int avg_size = 10;			// number of analog readings to average
+float R_0 = 20.0;			// known resistor value in [Kohms]
+float Vcc = 5.0;			//supply voltage
+float leftfoot_mass = 0.0;	//the mass on left foot
 float rightfoot_mass = 0.0; //the mass on right foot
 //...............
 // Receiving the desired speed data by UDP and hold it in this class
@@ -62,9 +76,8 @@ class MsgFromPC
 public:
 	float robot_command[MOTOR_NUM];
 	float motor_mode;
-	MSGPACK_DEFINE_ARRAY(robot_command,motor_mode);
+	MSGPACK_DEFINE_ARRAY(robot_command, motor_mode);
 };
-
 
 // unit messge to be sent to pc
 
@@ -74,155 +87,167 @@ public:
 	// float timestamps;
 	unsigned long timestamps;
 
-	float joint_pos[MOTOR_NUM*2]; // Rotation angle, unit degree
-	float joint_vel[MOTOR_NUM]; // Rotation speed, unit rad/s
+	float joint_pos[MOTOR_NUM * 2]; // Rotation angle, unit degree
+	float joint_vel[MOTOR_NUM];		// Rotation speed, unit rad/s
 	float joint_cur[MOTOR_NUM];
-	float joint_posraw[MOTOR_NUM]; // Rotation current, unit A
-	//float actuation[MOTOR_NUM]; 
-	float acc[3];				// Acceleration of IMU, unit m/s^2
-	float gyr[3];				// Gyroscope, unit deg/s
+	// float joint_posraw[MOTOR_NUM]; // Rotation current, unit A
+	//float actuation[MOTOR_NUM];
+	float orientation[6];
+	float acc[3]; // Acceleration of IMU, unit m/s^2
+	float gyr[3]; // Gyroscope, unit deg/s
 	float mag[3];
 	float euler[3];
-	float orientation[6];
 	float foot_force[2];
-	MSGPACK_DEFINE_ARRAY(timestamps, joint_pos, joint_vel, joint_cur, orientation,  gyr, acc, euler,foot_force,joint_posraw);
+	MSGPACK_DEFINE_ARRAY(timestamps, joint_pos, joint_vel, joint_cur, orientation, gyr, acc, euler, foot_force); //,joint_posraw);
 };
 
 class MsgToPC
 {
 public:
 	int header = 114514;
-	DataSend data [SEND_SIZE];
+	DataSend data[SEND_SIZE];
 	MSGPACK_DEFINE_ARRAY(header, data);
 };
 // set a object for sending UDP through msgpack
 MsgToPC msg_to_pc;
 DataSend data_send;
-std::deque <DataSend> send_buf;
+std::deque<DataSend> send_buf;
 
 //foot sensor...............
-float convert_4voltages_to_mass(float v1,float v2,float v3,float v4)  //v1:16; v2:17; v3:20; v4:21
+void convert_4voltages_to_mass(float v1, float v2, float v3, float v4) //v1:16; v2:17; v3:20; v4:21
 {
-    //Average 10 Voltage readings to sum_val 
-  float val_c3 = v1;
-  float val_g3 = v2;
-  float val_e1 = v3;
-  float val_a3 = v4;
 
-  //R_FSR
-  float R_FSR_c3;
-  float R_FSR_g3;
-  float R_FSR_e1;
-  float R_FSR_a3;
+	float R_FSR_c3 = R_0 * v1 / (1023 - v1);
+	float R_FSR_g3 = R_0 * v2 / (1023 - v2);
+	float R_FSR_e1 = R_0 * v3 / (1023 - v3);
+	float R_FSR_a3 = R_0 * v4 / (1023 - v4);
 
-  //Mass
-  float Mass_c3;
-  float Mass_g3;
-  float Mass_e1;
-  float Mass_a3;
+	float Mass_c3 = pow(10, c3_func[0] * log10(R_FSR_c3) + c3_func[1] / R_FSR_c3 + c3_func[2]);
+	float Mass_g3 = pow(10, g3_func[0] * log10(R_FSR_g3) + g3_func[1] / R_FSR_g3 + g3_func[2]);
+	float Mass_e1 = pow(10, e1_func[0] * log10(R_FSR_e1) + e1_func[1] / R_FSR_e1 + e1_func[2]);
+	float Mass_a3 = pow(10, a3_func[0] * log10(R_FSR_a3) + a3_func[1] / R_FSR_a3 + a3_func[2]);
 
-  //get the R_FSR for each fsr
-  R_FSR_c3 = (R_0/1000.0 * val_c3)/(Vcc - val_c3);
-  R_FSR_g3 = (R_0/1000.0 * val_g3)/(Vcc - val_g3);
-  R_FSR_e1 = (R_0/1000.0 * val_e1)/(Vcc - val_e1);
-  R_FSR_a3 = (R_0/1000.0 * val_a3)/(Vcc - val_a3);
-  
-  Mass_c3 = pow(10, c3_func[0] * log10(R_FSR_c3) + c3_func[1]/R_FSR_c3 + c3_func[2]);
-  Mass_g3 = pow(10, g3_func[0] * log10(R_FSR_g3) + g3_func[1]/R_FSR_g3 + g3_func[2]);
-  Mass_e1 = pow(10, e1_func[0] * log10(R_FSR_e1) + e1_func[1]/R_FSR_e1 + e1_func[2]);
-  Mass_a3 = pow(10, a3_func[0] * log10(R_FSR_a3) + a3_func[1]/R_FSR_a3 + a3_func[2]);
-
-  //divided by 1000, from g to kg
-  leftfoot_mass = (Mass_c3+Mass_a3)/1000;
-  rightfoot_mass = (Mass_g3+Mass_e1)/1000;
-  return leftfoot_mass, rightfoot_mass;
+	//divided by 1000, from g to kg
+	leftfoot_mass = (Mass_c3 + Mass_a3) / 1000;
+	rightfoot_mass = (Mass_g3 + Mass_e1) / 1000;
+	//   return leftfoot_mass, rightfoot_mass;
 }
 //.....................
 
+// struct IMU_DATA
+// {
+// 	float acc[3];
+// 	float angular_vel[3];
+// 	float euler_angle[3];
+// 	float magnetic_field[3];
+// };
 
-void ParseData(char chr) {
-  static char chrBuf[100];
-  static unsigned char chrCnt = 0;
-  signed short sData[4];
-  unsigned char i;
-  char cTemp = 0;
-  time_t now;
-  chrBuf[chrCnt++] = chr;
-  if (chrCnt < 11)
-    return;
-  for (i = 0; i < 10; i++)
-    cTemp += chrBuf[i];
-  if ((chrBuf[0] != 0x55) || ((chrBuf[1] & 0x50) != 0x50) ||
-      (cTemp != chrBuf[10])) {
-    printf("Error:%x %x\r\n", chrBuf[0], chrBuf[1]);
-    memcpy(&chrBuf[0], &chrBuf[1], 10);
-    chrCnt--;
-    return;
-  }
+class IMU
+{
+public:
+	// orientation calculation
+	float R_imuinverse[3][3] =
+		{{-0.8196347 , -0.57279632,  0.01016245},
+		 {0.57281627, -0.81968272, -0.00105455},
+		 {0.00893399,  0.00495684,  0.99994761}};
 
-  memcpy(&sData[0], &chrBuf[2], 8);
-  switch (chrBuf[1]) {
-  case 0x51:
-    for (i = 0; i < 3; i++)
-      a[i] = (float)sData[i] / 32768.0 * 16.0;
-    time(&now);
-    //printf("\r\nT:%s a:%6.3f %6.3f %6.3f ", asctime(localtime(&now)), a[0],
-           //a[1], a[2]);
-    break;
-  case 0x52:
-    for (i = 0; i < 3; i++)
-      w[i] = (float)sData[i] / 32768.0 * 2000.0;
-    //printf("w:%7.3f %7.3f %7.3f ", w[0], w[1], w[2]);
-    break;
-  case 0x53:
-    for (i = 0; i < 3; i++)
-      Angle[i] = (float)sData[i] / 32768.0 * 180.0;
-    //printf("A:%7.3f %7.3f %7.3f ", Angle[0], Angle[1], Angle[2]);
-    break;
-  case 0x54:
-    for (i = 0; i < 3; i++)
-      h[i] = (float)sData[i];
-    //printf("h:%4.0f %4.0f %4.0f ", h[0], h[1], h[2]);
+	float R[3][3] =
+		{{0, 0, 1},
+		 {0, -1, 0},
+		 {1, 0, 0}};
 
-    break;
-  }
-  chrCnt = 0;
-}
-void get_imu_data(Serial imu){
-	char r_buf[1024];
-	ret = imu.recv(r_buf, 44);
-			for (int i = 0; i < ret; i++) {
-			ParseData(r_buf[i]);
-			//usleep(1000);
-			}
-}
+	float imu_transform[3][3] = {0};
+	float robot_transform[3][3] = {0};
+	float Rw_r[3][3] = {0};
+	float Rw_r1[3][3] = {0};
+	float Rw_r2[3][3] = {0};
 
+	float acc[3], angular_vel[3], euler_angle[3] = {0}, magnetic_field[3];
 
-/*convert euler (roll,pitch,yaw) to rotation matrix */
-void eulerTomatrix(float& r, float& p, float& y,float rt_mat[3][3]){
-	rt_mat[0][0]=cos(r)*cos(p);
-	rt_mat[1][0]=sin(r)*cos(p);
-	rt_mat[2][0]=-sin(p);
-	rt_mat[0][1]=-sin(r)*cos(y)+cos(r)*sin(p)*sin(y);
-	rt_mat[1][1]=cos(r)*cos(y)+sin(r)*sin(p)*sin(y);
-	rt_mat[2][1]=cos(p)*sin(y);
-	rt_mat[0][2]=sin(r)*sin(y)+cos(r)*sin(p)*cos(y);
-	rt_mat[1][2]=-cos(r)*sin(y)+sin(r)*sin(p)*cos(y);
-	rt_mat[2][2]=cos(p)*cos(y);
-}
+	Serial serial{"/dev/ttyUSB0"};
 
-void matrix_dot(const float A[3][3], const float B[3][3], float C[3][3]){
-	for (int i = 0; i < 3; i++){
-		for (int j = 0; j < 3; j++){
-			float sum = 0;
-			for (int m = 0; m < 3; m++){
-				sum = sum + A[i][m] * B[m][j];
-			}
-			C[i][j] = sum;
-		}
+	bool RUNNING = true;
+
+	IMU()
+	{
+		//        baudrate,...
+		serial.uartSet(460800, 8, 'N', 1);
 	}
-}
-class UdpReceiver{
+
+	void ParseData(char chr)
+	{
+		static char chrBuf[100];
+		static unsigned char chrCnt = 0;
+		chrBuf[chrCnt++] = chr;
+		if (chrCnt < 11)
+			return;
+		signed short sData[4];
+		unsigned char i;
+		time_t now;
+		char cTemp = 0;
+		for (i = 0; i < 10; i++)
+			cTemp += chrBuf[i]; // checksum
+		if ((chrBuf[0] != 0x55) || ((chrBuf[1] & 0x50) != 0x50) ||
+			(cTemp != chrBuf[10]))
+		{
+			printf("Error:%x %x\r\n", chrBuf[0], chrBuf[1]);
+			memcpy(&chrBuf[0], &chrBuf[1], 10);
+			chrCnt--;
+			return;
+		}
+
+		memcpy(&sData[0], &chrBuf[2], 8);
+		switch (chrBuf[1])
+		{
+		case 0x51:
+			for (i = 0; i < 3; i++)
+				acc[i] = (float)sData[i] / 32768.0 * 16.0;
+			time(&now);
+			//printf("\r\nT:%s acc:%6.3f %6.3f %6.3f ", asctime(localtime(&now)), acc[0],
+			//acc[1], acc[2]);
+			break;
+		case 0x52:
+			for (i = 0; i < 3; i++)
+				angular_vel[i] = (float)sData[i] / 32768.0 * 2000.0;
+			//printf("angular_vel:%7.3f %7.3f %7.3f ", angular_vel[0], angular_vel[1], angular_vel[2]);
+			break;
+		case 0x53:
+			for (i = 0; i < 3; i++)
+				// euler_angle[i] = (float)sData[i] / 32768.0 * 180.0; // in deg
+				euler_angle[i] = (float)sData[i] / 32768.0 * M_PI; // in rad
+			//printf("A:%7.3f %7.3f %7.3f ", euler_angle[0], euler_angle[1], euler_angle[2]);
+			break;
+		case 0x54:
+			for (i = 0; i < 3; i++)
+				magnetic_field[i] = (float)sData[i];
+			//printf("magnetic_field:%4.0f %4.0f %4.0f ", magnetic_field[0], magnetic_field[1], magnetic_field[2]);
+			break;
+		}
+		chrCnt = 0;
+	}
+
+	void run()
+	{
+		char r_buf[1024];
+		while (RUNNING)
+		{
+			ret = serial.recv(r_buf, 44); // 4 group of 11 bytes
+			for (int i = 0; i < ret; i++)
+			{
+				ParseData(r_buf[i]);
+			}
+
+			eulerTomatrix(euler_angle[2], euler_angle[1], euler_angle[0], imu_transform);
+			matrix_dot(R_imuinverse, imu_transform, Rw_r1);
+			matrix_dot(Rw_r1, R, Rw_r);
+		}
+		serial.close();
+	}
+
+};
+
+class UdpReceiver
+{
 public:
 	bool RUNNING = true; // indicating whether the main loop is running
 	std::deque<MsgFromPC> msg_queue;
@@ -254,7 +279,8 @@ public:
 			msgpack::object obj = oh.get();
 			obj.convert(recv);
 			msg_queue.push_front(recv);
-			while(msg_queue.size()>1){
+			while (msg_queue.size() > 1)
+			{
 				msg_queue.pop_back();
 			}
 		}
@@ -263,18 +289,16 @@ public:
 
 int main()
 {
+	Teensycomm_struct_t msg_from_teensy; // A data struct received from Teensy
+	Jetson_comm_struct_t msg_to_teensy;	 // A data struct sent to Teensy
+
 	// Initialize corresponding data structure
 	for (int i = 0; i < MOTOR_NUM; ++i)
 		desired_pos[i] = 0.0;
-	motor_mode=0; // 0:position control
-
-
-	Teensycomm_struct_t comm;
-	int ret;
-
+	motor_mode = 0; // 0:position control
 
 	UdpReceiver udp_receiver;
-	std::thread recv_thread(&UdpReceiver::run,&udp_receiver); // udp receiving in a separate thread
+	std::thread recv_thread(&UdpReceiver::run, &udp_receiver); // udp receiving in a separate thread
 	printf("\ninitialized\n");
 
 	/*********************UDP_Sending_Initializing*********************/
@@ -290,125 +314,146 @@ int main()
 	inet_pton(AF_INET, PC_IP_ADDR, &client_send.sin_addr); // Address
 	bind(sock_send, (struct sockaddr *)&client_send, sock_length_send);
 
-
 	/*********************Serial for IMU *********************/
-	Serial imu {"/dev/ttyUSB0"};
-	//        baudrate,...
-  	imu.uartSet(460800, 8, 'N', 1);
-  	char r_buf[1024];
+	// Serial imu{"/dev/ttyUSB0"};
+	// //        baudrate,...
+	// imu.uartSet(460800, 8, 'N', 1);
+	// char r_buf[1024];
+	IMU imu{};
+
+	
+
+	std::thread imu_thread(&IMU::run, &imu); // udp receiving in a separate thread
 
 	/********************* Serial for teensy****************************/
-	Serial teensy_serial {"/dev/ttyACM0"};
+	Serial teensy_serial{"/dev/ttyACM0"};
 	teensy_serial.uartSet(1000000, 8, 'N', 1);
 
-
-
+	
+	
 	/******************************************************************/
-	while (1){
-		if(udp_receiver.msg_queue.size()>0){
+	while (1)
+	{
+		if (udp_receiver.msg_queue.size() > 0)
+		{
 			MsgFromPC recv = udp_receiver.msg_queue.front();
-			for (int i = 0; i < MOTOR_NUM; i++){
+			for (int i = 0; i < MOTOR_NUM; i++)
+			{
 				desired_pos[i] = recv.robot_command[i];
 			}
-			motor_mode=recv.motor_mode;
+			motor_mode = recv.motor_mode;
 		}
-		//printf("%f\t", desired_pos[0]);
+		
 
+		//printf("%f\t", desired_pos[0]);
 
 		// Update output data structue
 		for (int i = 0; i < MOTOR_NUM; i++)
-			jetson_comm.comd[i] = desired_pos[i];
-		jetson_comm.motor_mode[0]=motor_mode;
+			msg_to_teensy.comd[i] = desired_pos[i];
+		msg_to_teensy.motor_mode[0] = motor_mode;
 		// send to teensy
-		teensy_serial.sendStruct(jetson_comm);
-		// receive from teensy
 		
-		teensy_serial.recvStruct(comm);
+		
 
-		// Teensycomm_struct_t comm_ = teensy_serial.recvStruct<Teensycomm_struct_t>();
-		// comm = &comm_;
-
-		get_imu_data(imu);//TODO.....
+		teensy_serial.sendStruct(msg_to_teensy);
+		//std::cout<<"reached1"<<'\n';
+		// receive from teensy
+		teensy_serial.recvStruct(msg_from_teensy);
+		//std::cout<<"reached2"<<'\n';
+		// printf("done sending to teensy 1212\n");
 
 		// data_send.timestamps = comm->timestamps;
 
-		unsigned long milliseconds_since_epoch = 
-		std::chrono::duration_cast<std::chrono::microseconds>
-			(std::chrono::system_clock::now().time_since_epoch()).count();
+		unsigned long milliseconds_since_epoch =
+			std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 		data_send.timestamps = milliseconds_since_epoch;
 
 		MsgFromPC recv = udp_receiver.msg_queue.front();
 		for (int j = 0; j < MOTOR_NUM; ++j)
 		{
-			// Angle of motors:
-			data_send.joint_posraw[j] = comm.joint_pos[j];
+			// // Angle of motors:
+			// data_send.joint_posraw[j] = comm.joint_pos[j];
 			// Speed of motors:
-			data_send.joint_vel[j] = comm.joint_vel[j];
+			data_send.joint_vel[j] = msg_from_teensy.joint_vel[j];
 			// Angle of motors:
-			data_send.joint_pos[j*2] = std::cos(comm.joint_pos[j]);
-			data_send.joint_pos[j*2+1] = std::sin(comm.joint_pos[j]);
+			data_send.joint_pos[j * 2] = std::cos(msg_from_teensy.joint_pos[j]);
+			data_send.joint_pos[j * 2 + 1] = std::sin(msg_from_teensy.joint_pos[j]);
 			// Current of motors:
-			data_send.joint_cur[j] = comm.joint_cur[j];
+			data_send.joint_cur[j] = msg_from_teensy.joint_cur[j] * 9.375;
 		}
 		//std::cout<<comm->joint_cur[1]<<" "<<comm->joint_cur[1]<< " "<<comm->joint_cur[2]<<'\n';
-		for (int i = 0; i < 3; ++i){
+		for (int i = 0; i < 3; ++i)
+		{
 			// msg_to_pc.mag[i] = comm->mag[i];
-			data_send.acc[i] = a[i];
-			data_send.gyr[i] = w[i];
-			data_send.euler[i] = Angle[i];
+			data_send.acc[i] = imu.acc[i];
+			data_send.gyr[i] = imu.angular_vel[i];
+			data_send.euler[i] = imu.euler_angle[i];
 		}
 		//std::cout<<data_send.joint_cur[2]<<'\n';
-		
-		//std::cout<<Angle[0]<<" "<<Angle[1]<<" "<<Angle[2]<<'\n';
-		//printf("\n");
-		eulerTomatrix(Angle[0],Angle[1],Angle[2],imu_transform);
 
-		matrix_dot(R, R_imuinverse,Rw_r1);
-		matrix_dot(Rw_r1,imu_transform,Rw_r);
+		data_send.orientation[0] = imu.Rw_r[0][0];
+		data_send.orientation[1] = imu.Rw_r[0][1];
+		data_send.orientation[2] = imu.Rw_r[0][2];
+		data_send.orientation[3] = imu.Rw_r[1][0];
+		data_send.orientation[4] = imu.Rw_r[1][1];
+		data_send.orientation[5] = imu.Rw_r[1][2];
 
-		float Rall[6]={Rw_r[0][0],Rw_r[1][0],Rw_r[2][0],Rw_r[0][1],Rw_r[1][1],Rw_r[2][1]};
-		for (int i = 0; i < 6; ++i){
-			data_send.orientation[i] =Rall[i];
-		}
-		// std::cout<<Rw_r[0][0]<<" "<<Rw_r[0][1]<<" "<<Rw_r[0][2]<<'\n';
-		// std::cout<<Rw_r[1][0]<<" "<<Rw_r[1][1]<<" "<<Rw_r[1][2]<<'\n';
-		// std::cout<<Rw_r[2][0]<<" "<<Rw_r[2][1]<<" "<<Rw_r[2][2]<<'\n';
+		//std::cout<<imu.euler_angle[0]<<","<<imu.euler_angle[1]<<","<<imu.euler_angle[2]<<'\n';
+
+		// std::cout<<imu.imu_transform[0][0]<<" "<<imu.imu_transform[0][1]<<" "<<imu.imu_transform[0][2]<<'\n';
+		// std::cout<<imu.imu_transform[1][0]<<" "<<imu.imu_transform[1][1]<<" "<<imu.imu_transform[1][2]<<'\n';
+		// std::cout<<imu.imu_transform[2][0]<<" "<<imu.imu_transform[2][1]<<" "<<imu.imu_transform[2][2]<<'\n';
+
+		// std::cout<<imu.Rw_r[0][0]<<" "<<imu.Rw_r[0][1]<<" "<<imu.Rw_r[0][2]<<'\n';
+		// std::cout<<imu.Rw_r[1][0]<<" "<<imu.Rw_r[1][1]<<" "<<imu.Rw_r[1][2]<<'\n';
+		// std::cout<<imu.Rw_r[2][0]<<" "<<imu.Rw_r[2][1]<<" "<<imu.Rw_r[2][2]<<'\n';
 
 		// Foot sensor data process............
-		leftfoot_mass, rightfoot_mass=convert_4voltages_to_mass(comm.foot_force[0],comm.foot_force[2],comm.foot_force[1],comm.foot_force[3]);
+		convert_4voltages_to_mass(msg_from_teensy.foot_force[0], msg_from_teensy.foot_force[2], msg_from_teensy.foot_force[1], msg_from_teensy.foot_force[3]);
 		// on/off contact switch
-		data_send.foot_force[0]= leftfoot_mass>0.5? 1:0;
-		data_send.foot_force[1]= rightfoot_mass>0.5? 1:0;
+		data_send.foot_force[0] = leftfoot_mass > 0.5 ? 1 : 0;
+		data_send.foot_force[1] = rightfoot_mass > 0.5 ? 1 : 0;
 
-
+		// std::cout<<data_send.foot_force[0]<<" "<<data_send.foot_force[1]<<std::endl;
 		// data_send.foot_force[0]=leftfoot_mass;
 		// data_send.foot_force[1]=rightfoot_mass;
 		// std::cout<<comm.foot_force[0]<<" "<<comm.foot_force[2]<<" "<<comm.foot_force[1]<<" "<<comm.foot_force[3]<<'\n';
 		// std::cout<<leftfoot_mass<<" "<<rightfoot_mass<<'\n';
 		//.................
 
-		
 		send_buf.push_front(data_send);
 
-		while (send_buf.size()>BUFFER_SIZE){send_buf.pop_back();}
-		
-		if (send_buf.size()==BUFFER_SIZE){
-			for (int i = 0; i < SEND_SIZE; i++){
-				msg_to_pc.data[i] = send_buf[i*STEP_SIZE];
+		while (send_buf.size() > BUFFER_SIZE)
+		{
+			send_buf.pop_back();
+		}
+
+		if (send_buf.size() == BUFFER_SIZE)
+		{
+			for (int i = 0; i < SEND_SIZE; i++)
+			{
+				msg_to_pc.data[i] = send_buf[i * STEP_SIZE];
 			}
-			
-		std::stringstream send_stream;
-		msgpack::pack(send_stream, msg_to_pc);
-		std::string const &data = send_stream.str();
-		sendto(sock_send, data.c_str(), data.size(), 0, (struct sockaddr *)&client_send, sizeof(client_send));
+
+			std::stringstream send_stream;
+			msgpack::pack(send_stream, msg_to_pc);
+			std::string const &data = send_stream.str();
+			sendto(sock_send, data.c_str(), data.size(), 0, (struct sockaddr *)&client_send, sizeof(client_send));
 		}
 	}
-	
 
 	udp_receiver.RUNNING = false;
-	if (recv_thread.joinable()){recv_thread.join();}
+	if (recv_thread.joinable())
+	{
+		recv_thread.join();
+	}
 
-	imu.close();
+	imu.RUNNING = false;
+	if (imu_thread.joinable())
+	{
+		imu_thread.join();
+	}
+
 	teensy_serial.close();
 
 	return 0;

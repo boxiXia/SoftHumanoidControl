@@ -1,45 +1,38 @@
 #ifndef __HOST_H
 #define __HOST_H
 
-#define MOTOR_NUM				12			// Number of ESCs
+/*convert euler (roll,pitch,yaw) in rad to rotation matrix */
+void eulerTomatrix(float& w, float& v, float& u,float rt_mat[3][3]){
+	rt_mat[0][0]=cos(v)*cos(w);
+	rt_mat[1][0]=sin(w)*cos(v);
+	rt_mat[2][0]=-sin(v);
+	rt_mat[0][1]=-sin(w)*cos(u)+cos(w)*sin(u)*sin(v);
+	rt_mat[1][1]=cos(u)*cos(w)+sin(u)*sin(v)*sin(w);
+	rt_mat[2][1]=cos(v)*sin(u);
+	rt_mat[0][2]=sin(u)*sin(w)+cos(u)*sin(v)*cos(w);
+	rt_mat[1][2]=-cos(w)*sin(u)+sin(w)*sin(v)*cos(u);
+	rt_mat[2][2]=cos(u)*cos(v);
+}
 
-#define SEND_SIZE 5
-#define STEP_SIZE  3
-#define BUFFER_SIZE 15
-static int ret;
-static int fd;
-float desired_pos[MOTOR_NUM] = {0}; // The deisred speed
-float motor_mode;
-
-// Teensy->host communication data structure
-// sizeof(ESCPID_comm)=64 to match USB 1.0 buffer size
-typedef struct {
-  float    joint_pos[MOTOR_NUM];      // Motors rotation angle
-  float    joint_vel[MOTOR_NUM];     // Motors rad/s
-  float	   joint_cur[MOTOR_NUM];     // Motors torque
-  float    foot_force[4];
-  float    timestamps;
-} Teensycomm_struct_t;
-
-// Host->teensy communication data structure
-// sizeof(RPi_comm)=64 to match USB 1.0 buffer size
-typedef struct {
-  float    comd[MOTOR_NUM];        		// Desired Speed, rad/s
-  float    motor_mode[1];
-} Jetson_comm_struct_t;
-
-
-Teensycomm_struct_t teensy_comm;  // A data struct received from Teensy
-Jetson_comm_struct_t jetson_comm; // A data struct sent to Teensy
-
+void matrix_dot(const float A[3][3], const float B[3][3], float C[3][3]){
+	for (int i = 0; i < 3; i++){
+		for (int j = 0; j < 3; j++){
+			float sum = 0;
+			for (int m = 0; m < 3; m++){
+				sum = sum + A[i][m] * B[m][j];
+			}
+			C[i][j] = sum;
+		}
+	}
+}
 
 
 /*--------------------------------------------------------*/
 inline int uart_open(int fd, const char *pathname) {
   fd = open(pathname, O_RDWR | O_NOCTTY | O_NONBLOCK);
   if (-1 == fd) {
-    perror("Can't Open Serial Port");
-    return (-1);
+    printf("Can't Open Serial Port %s\n",pathname);
+    exit (-1);
   } else
     printf("open %s success!\n", pathname);
   if (isatty(STDIN_FILENO) == 0)
@@ -213,7 +206,7 @@ int sendStruct(DataStruct data){
 template <class DataStruct>
 void recvStruct(DataStruct& data){
 	int res = 0;
-	
+	int ret;
   // DataStruct data;  // A data struct received from Teensy
   uint8_t *pt_in = (uint8_t *)(&data);
 
@@ -226,7 +219,6 @@ void recvStruct(DataStruct& data){
 		if (ret < 0)
 			break;
 	} while (res < sizeof(DataStruct));
-
 
   // res = read(fd, pt_in, sizeof(data));
 
@@ -241,11 +233,6 @@ void recvStruct(DataStruct& data){
 		// return -4; //TODO...
 	}
 
-  // Return pointer to _data
-	// *_data = &data;
-
-  // return 0;
-  // return data;
 }
 
 };

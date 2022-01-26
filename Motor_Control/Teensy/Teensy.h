@@ -11,7 +11,7 @@ typedef struct {
   float    joint_pos[MOTOR_NUM];      // Motors rotation angle
   float    joint_vel[MOTOR_NUM];     // Motors rad/s
   float    joint_cur[MOTOR_NUM];     // Motors current
-  float    foot_force[4];
+  int16_t    foot_force[4];
   float    timestamps;
 } Teensycomm_struct_t;
 
