@@ -1,10 +1,25 @@
 /*****************host.cpp******************/
-// compile:
-// sudo g++ -pthread host.cpp
-// autorun: edit /etc/rc.local:
-//			add: path_to_a.out &
-// run:
-// ./a.out
+/*
+To compile:
+	sudo g++ -Wall -pthread host.cpp -o robot_control.o
+To setup autorun, edit /etc/rc.local:
+# bash:
+	sudo nano /etc/rc.local
+add following lines:h
+	path_to_the_robot_control.o &
+also make sure that the first line of the rc.local looks like:
+	#!/bin/sh -e
+you can check with this bash command
+	head -n1 /etc/rc.local
+make sure that rc.local is executable,to check:
+	ls -l /etc/rc.local
+You should see:
+	 -rwxr-xr-x 1 root root 419 2010-08-27 11:26 /etc/rc.local
+if not, run this line:
+	sudo chmod +x /etc/rc.local 
+To run manually:
+	./robot_control.o
+*/
 /*******************************************/
 #define _USE_MATH_DEFINES
 #include <math.h>
@@ -55,7 +70,7 @@ typedef struct
 typedef struct
 {
 	float comd[MOTOR_NUM]; // Desired Speed, rad/s
-	float motor_mode[1];
+	float motor_mode;
 } Jetson_comm_struct_t;
 
 // foot sensor ............
@@ -147,9 +162,9 @@ class IMU
 public:
 	// orientation calculation
 	float R_imuinverse[3][3] =
-		{{-0.8196347 , -0.57279632,  0.01016245},
+		{{-0.8196347, -0.57279632, 0.01016245},
 		 {0.57281627, -0.81968272, -0.00105455},
-		 {0.00893399,  0.00495684,  0.99994761}};
+		 {0.00893399, 0.00495684, 0.99994761}};
 
 	float R[3][3] =
 		{{0, 0, 1},
@@ -170,8 +185,7 @@ public:
 
 	IMU()
 	{
-		//        baudrate,...
-		serial.uartSet(460800, 8, 'N', 1);
+		serial.uartSet(460800, 8, 'N', 1); //set baudrate,...
 	}
 
 	void ParseData(char chr)
@@ -243,7 +257,6 @@ public:
 		}
 		serial.close();
 	}
-
 };
 
 class UdpReceiver
@@ -321,16 +334,11 @@ int main()
 	// char r_buf[1024];
 	IMU imu{};
 
-	
-
 	std::thread imu_thread(&IMU::run, &imu); // udp receiving in a separate thread
-
 	/********************* Serial for teensy****************************/
 	Serial teensy_serial{"/dev/ttyACM0"};
 	teensy_serial.uartSet(1000000, 8, 'N', 1);
 
-	
-	
 	/******************************************************************/
 	while (1)
 	{
@@ -342,21 +350,17 @@ int main()
 				desired_pos[i] = recv.robot_command[i];
 			}
 			motor_mode = recv.motor_mode;
+
+			// Update output data structue
+			for (int i = 0; i < MOTOR_NUM; i++)
+				msg_to_teensy.comd[i] = desired_pos[i];
+			msg_to_teensy.motor_mode = motor_mode;
+			// send to teensy
+			teensy_serial.sendStruct(msg_to_teensy);
 		}
 		
 
-		//printf("%f\t", desired_pos[0]);
 
-		// Update output data structue
-		for (int i = 0; i < MOTOR_NUM; i++)
-			msg_to_teensy.comd[i] = desired_pos[i];
-		msg_to_teensy.motor_mode[0] = motor_mode;
-		// send to teensy
-		
-		
-
-		teensy_serial.sendStruct(msg_to_teensy);
-		//std::cout<<"reached1"<<'\n';
 		// receive from teensy
 		teensy_serial.recvStruct(msg_from_teensy);
 		//std::cout<<"reached2"<<'\n';
