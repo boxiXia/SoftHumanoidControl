@@ -287,14 +287,29 @@ public:
 		/******************************************************************/
 		while (RUNNING)
 		{
-			int datalength = recvfrom(sock_recv, buf_UDP_recv, UDP_BUFFER_SIZE, 0, (struct sockaddr *)&hold_recv, &fromlen);
-			msgpack::object_handle oh = msgpack::unpack(buf_UDP_recv, datalength);
-			msgpack::object obj = oh.get();
-			obj.convert(recv);
-			msg_queue.push_front(recv);
-			while (msg_queue.size() > 1)
+			try
 			{
-				msg_queue.pop_back();
+				int datalength = recvfrom(sock_recv, buf_UDP_recv, UDP_BUFFER_SIZE, 0, (struct sockaddr *)&hold_recv, &fromlen);
+				msgpack::object_handle oh = msgpack::unpack(buf_UDP_recv, datalength);
+				msgpack::object obj = oh.get();
+				obj.convert(recv);
+				msg_queue.push_front(recv);
+				while (msg_queue.size() > 1)
+				{
+					msg_queue.pop_back();
+				}
+			}
+			catch (const std::bad_cast &e)
+			{ // msgpack obj.as<T> error
+				printf("Error converting %s,line %d: %s \n", __FILE__, __LINE__, e.what());
+			}
+			catch (const msgpack::unpack_error e)
+			{
+				printf("Error converting %s,line %d: %s \n", __FILE__, __LINE__, e.what());
+			}
+			catch (const std::exception &e)
+			{ // standard exceptions
+				printf("Error converting %s,line %d: %s \n", __FILE__, __LINE__, e.what());
 			}
 		}
 	}
@@ -358,8 +373,6 @@ int main()
 			// send to teensy
 			teensy_serial.sendStruct(msg_to_teensy);
 		}
-		
-
 
 		// receive from teensy
 		teensy_serial.recvStruct(msg_from_teensy);
