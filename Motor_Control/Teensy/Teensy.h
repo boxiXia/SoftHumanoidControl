@@ -17,10 +17,11 @@ typedef struct {
 
 // Host->teensy communication data structure
 typedef struct {
+  u_int16_t header;
   float    comd[MOTOR_NUM];            // Desired position, rad
-  float    motor_mode;
 } Jetson_comm_struct_t;
 
+constexpr u_int16_t HEADER_POS_CONTROL = 10001;
 
 
 /* clamp a value data between lower and upper */

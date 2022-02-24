@@ -21,7 +21,6 @@ float rotor_pos[MOTOR_NUM];
 uint16_t rotor_pos_raw_arr[MOTOR_NUM];
 int r_num[MOTOR_NUM];
 
-float motor_mode = 0;//0: position control; 1: velocity control
 
 // Motor shaft position [rad]
 float joint_pos[MOTOR_NUM];
@@ -62,10 +61,11 @@ constexpr uint16_t joint_can_addr[MOTOR_NUM] = {0x141, 0x142, 0x143, 0x144, 0x14
 bool can_read_success[MOTOR_NUM];
 
 //............foot sensor
-constexpr int pin_left_forefoot = 16;
-constexpr int pin_left_backheel = 17;
-constexpr int pin_right_forefoot = 20;
-constexpr int pin_right_backheel = 21;
+#define SENSOR_PIN_NUM 4
+// pin mapping for the foot sensor
+// pin_left_forefoot = 21, pin_left_backheel = 20
+// pin_right_forefoot = 17, pin_right_backheel = 16
+constexpr int sensor_pin[SENSOR_PIN_NUM] = {21,20,17,16};
 
 bool left_touch = 0;
 bool right_touch = 0;
@@ -357,13 +357,16 @@ void receiveFromSerial()
   if (in_cnt == (int)sizeof(jetson_comm))
   {
     in_cnt = 0; // Clear incoming bytes counter
-    jetson_comm_ready = true;
+
+    if(jetson_comm.header==HEADER_POS_CONTROL){//validate the incomming data
+      jetson_comm_ready = true; 
+    }
+    
   }
 
   if (jetson_comm_ready)
   {
     jetson_comm_ready = false;
-    motor_mode = jetson_comm.motor_mode;
     for (int i = 0; i < MOTOR_NUM; ++i)
     {
       joint_pos_desired[i] = jetson_comm.comd[i];
@@ -372,6 +375,17 @@ void receiveFromSerial()
     }
   }
 }
+
+
+void readFootSensors(){
+  //...............foot sensor
+  // from 0-1023, 5v, measure fixed resistor
+  for (int i = 0; i < SENSOR_PIN_NUM; ++i)
+  {
+    teensy_comm.foot_force[i] = analogRead(sensor_pin[i]); 
+  }
+}
+
 
 void sendToSerial(){
   // Save angle, speed and torque into struct teensy_comm
@@ -383,13 +397,6 @@ void sendToSerial(){
   }
 
   teensy_comm.timestamps = (float)micros() / 1000000.0;
-
-  //...............foot sensor
-  // from 0-1023, 5v, measure fixed resistor
-  teensy_comm.foot_force[0] = analogRead(pin_left_forefoot);  //pin16:v1
-  teensy_comm.foot_force[1] = analogRead(pin_left_backheel);  //pin21:v4
-  teensy_comm.foot_force[2] = analogRead(pin_right_forefoot); //pin17:v2
-  teensy_comm.foot_force[3] = analogRead(pin_right_backheel); //pin20:v3
   //...............
   // Send data structure teensy_comm to Jetson
   Serial.write(ptout, sizeof(teensy_comm));
@@ -397,7 +404,8 @@ void sendToSerial(){
   Serial.send_now();
 }
 
-void serialDebugHelper(){
+
+void serialDebugHelper(bool debug_can=false,bool debug_analog=false){
 
   static int counter = 0;
   static int counter_prev = 0;
@@ -422,19 +430,31 @@ void serialDebugHelper(){
 
     Serial.print(fps);
     Serial.print("||");
-    for (int i = 0; i < MOTOR_NUM; ++i)
+    if (debug_can)
     {
-      // Serial.print(joint_pos[i]-joint_pos_desired[i]);
-      // Serial.print(" ");
+      for (int i = 0; i < MOTOR_NUM; ++i)
+      {
+        // Serial.print(joint_pos[i]-joint_pos_desired[i]);
+        // Serial.print(" ");
 
-      Serial.print(1-float(can_read_success_counter[i])/float(conter_difference));
-      Serial.print(" ");
-      can_read_success_counter[i] = 0;
-      
-      // Serial.print(motor_multi_anlge[i]);
-      // Serial.print(joint_cur[i]);
+        Serial.print(1 - float(can_read_success_counter[i]) / float(conter_difference));
+        Serial.print(" ");
+        can_read_success_counter[i] = 0;
+
+        // Serial.print(motor_multi_anlge[i]);
+        // Serial.print(joint_cur[i]);
+      }
+      Serial.print("\n");
     }
-    Serial.print("\n");
+    if (debug_analog)
+    {
+      for (int i = 0; i < SENSOR_PIN_NUM; ++i)
+      {
+        Serial.print(teensy_comm.foot_force[i]);
+        Serial.print(" ");
+      }
+      Serial.print("\n");
+    }
   }
 }
 
@@ -459,6 +479,15 @@ void setup()
   while(millis() - t < 2000){//wait for 2000 ms for the motor to reset
     controlMotors(90*REDUCTION_RATIO);      
   }
+
+
+  // initialize foot sensor, i.e. the analog pin input to measure resistance 
+  // of the pressure sensitive resistors
+  for (int i = 0; i < SENSOR_PIN_NUM; ++i)
+  {
+    pinMode(sensor_pin[i], INPUT);
+  }
+  analogReadAveraging(1); // less ADC charge injection
 }
 
 
@@ -466,12 +495,19 @@ void setup()
 void loop()
 {
 
-  controlMotors();
+  
+
   // dummyControlMotors();
   // zeroTorqueControl();
   // getMotorRotorMultiAngle(false);
-  // serialDebugHelper();
 
-  receiveFromSerial();
+  controlMotors();
+  
+  readFootSensors();
+
   sendToSerial();
+  receiveFromSerial();
+
+  // serialDebugHelper(false,true);
+
 }

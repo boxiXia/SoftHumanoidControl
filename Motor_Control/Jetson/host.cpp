@@ -19,6 +19,8 @@ if not, run this line:
 	sudo chmod +x /etc/rc.local 
 To run manually:
 	./robot_control.o
+
+To connect the serial IMU, refer to:https://www.jetsonhacks.com/2019/10/10/jetson-nano-uart/
 */
 /*******************************************/
 #define _USE_MATH_DEFINES
@@ -52,7 +54,6 @@ static int ret;
 
 constexpr int MOTOR_NUM = 12;		// Number of ESCs
 float desired_pos[MOTOR_NUM] = {0}; // The deisred speed
-float motor_mode;
 
 // Teensy->host communication data structure
 // sizeof(ESCPID_comm)=64 to match USB 1.0 buffer size
@@ -69,29 +70,19 @@ typedef struct
 // sizeof(RPi_comm)=64 to match USB 1.0 buffer size
 typedef struct
 {
+	u_int16_t header;
 	float comd[MOTOR_NUM]; // Desired Speed, rad/s
-	float motor_mode;
 } Jetson_comm_struct_t;
 
-// foot sensor ............
-float c3_func[3] = {-0.4079, 0.0269, 2.9743}; //pin16:left_forefoot
-float g3_func[3] = {-0.4278, 0.0167, 3.0961}; //pin17:left_backheel
-float e1_func[3] = {-0.3057, 0.0167, 3.1222}; //pin20:right_forefoot
-float a3_func[3] = {-0.3781, 0.0197, 3.0990}; //pin21:right_backheel
 
-int avg_size = 10;			// number of analog readings to average
-float R_0 = 20.0;			// known resistor value in [Kohms]
-float Vcc = 5.0;			//supply voltage
-float leftfoot_mass = 0.0;	//the mass on left foot
-float rightfoot_mass = 0.0; //the mass on right foot
 //...............
 // Receiving the desired speed data by UDP and hold it in this class
 class MsgFromPC
 {
 public:
+	u_int16_t header;
 	float robot_command[MOTOR_NUM];
-	float motor_mode;
-	MSGPACK_DEFINE_ARRAY(robot_command, motor_mode);
+	MSGPACK_DEFINE_ARRAY(header,robot_command);
 };
 
 // unit messge to be sent to pc
@@ -101,19 +92,26 @@ class DataSend
 public:
 	// float timestamps;
 	unsigned long timestamps;
-
-	float joint_pos[MOTOR_NUM * 2]; // Rotation angle, unit degree
+	float joint_pos[MOTOR_NUM * 2]; // Rotation angle, unit rad
 	float joint_vel[MOTOR_NUM];		// Rotation speed, unit rad/s
 	float joint_cur[MOTOR_NUM];
-	// float joint_posraw[MOTOR_NUM]; // Rotation current, unit A
-	//float actuation[MOTOR_NUM];
 	float orientation[6];
 	float acc[3]; // Acceleration of IMU, unit m/s^2
 	float gyr[3]; // Gyroscope, unit deg/s
 	float mag[3];
 	float euler[3];
 	float foot_force[2];
-	MSGPACK_DEFINE_ARRAY(timestamps, joint_pos, joint_vel, joint_cur, orientation, gyr, acc, euler, foot_force); //,joint_posraw);
+	MSGPACK_DEFINE_ARRAY(
+		timestamps,   // 0
+		joint_pos,    // 1
+		joint_vel,    // 2
+		joint_cur,    // 3
+		orientation,  // 4
+		gyr,          // 5
+		acc,          // 6
+		euler,        // 7
+		foot_force    // 8
+		); 
 };
 
 class MsgToPC
@@ -128,24 +126,57 @@ MsgToPC msg_to_pc;
 DataSend data_send;
 std::deque<DataSend> send_buf;
 
+
+// foot sensor ............
+
+constexpr float a3_func[3] = {-0.3781, 0.0197, 3.0990}; //left_forefoot 
+constexpr float c3_func[3] = {-0.4079, 0.0269, 2.9743}; //left_backheel
+
+constexpr float e1_func[3] = {-0.3057, 0.0272, 3.1222}; //right_forefoot
+constexpr float g3_func[3] = {-0.4278, 0.0167, 3.0961}; //right_backheel
+
+
+#define SENSOR_PIN_NUM 4
+ 
+constexpr float fsr_coeff[SENSOR_PIN_NUM][3] = {
+	{-0.3781, 0.0197, 3.0990}, //a3, left_forefoot 
+	{-0.4079, 0.0269, 2.9743}, //c3, left_backheel
+	{-0.3057, 0.0272, 3.1222}, //e1, right_forefoot
+	{-0.4278, 0.0167, 3.0961} //g3, right_backheel
+};
+
+float R_FSR[SENSOR_PIN_NUM];
+float measured_mass[SENSOR_PIN_NUM];
+constexpr float R_0 = 7.44;			// known resistor value in [Kohms]
+float leftfoot_mass;	//the mass on left foot
+float rightfoot_mass; //the mass on right foot
 //foot sensor...............
-void convert_4voltages_to_mass(float v1, float v2, float v3, float v4) //v1:16; v2:17; v3:20; v4:21
+void convert_4voltages_to_mass(int16_t v[])//, float v1, float v2, float v3, float v4) //v1:16; v2:17; v3:20; v4:21
 {
 
-	float R_FSR_c3 = R_0 * v1 / (1023 - v1);
-	float R_FSR_g3 = R_0 * v2 / (1023 - v2);
-	float R_FSR_e1 = R_0 * v3 / (1023 - v3);
-	float R_FSR_a3 = R_0 * v4 / (1023 - v4);
+	for(int i=0;i<SENSOR_PIN_NUM;++i){
+		R_FSR[i] = R_0 * v[i] / (1023 - v[i]);
+		measured_mass[i] = pow(10, fsr_coeff[i][0] * log10(R_FSR[i]) + fsr_coeff[i][1] / R_FSR[i] + fsr_coeff[i][2]);
+	}
+	leftfoot_mass = (measured_mass[0] + measured_mass[1]) / 1000;
+	rightfoot_mass = (measured_mass[2] + measured_mass[3]) / 1000;
 
-	float Mass_c3 = pow(10, c3_func[0] * log10(R_FSR_c3) + c3_func[1] / R_FSR_c3 + c3_func[2]);
-	float Mass_g3 = pow(10, g3_func[0] * log10(R_FSR_g3) + g3_func[1] / R_FSR_g3 + g3_func[2]);
-	float Mass_e1 = pow(10, e1_func[0] * log10(R_FSR_e1) + e1_func[1] / R_FSR_e1 + e1_func[2]);
-	float Mass_a3 = pow(10, a3_func[0] * log10(R_FSR_a3) + a3_func[1] / R_FSR_a3 + a3_func[2]);
+	// float R_FSR_a3 = R_0 * v4 / (1023 - v4);
+	// float R_FSR_c3 = R_0 * v1 / (1023 - v1);
 
-	//divided by 1000, from g to kg
-	leftfoot_mass = (Mass_c3 + Mass_a3) / 1000;
-	rightfoot_mass = (Mass_g3 + Mass_e1) / 1000;
-	//   return leftfoot_mass, rightfoot_mass;
+	// float R_FSR_e1 = R_0 * v3 / (1023 - v3);
+	// float R_FSR_g3 = R_0 * v2 / (1023 - v2);
+	
+	// float Mass_a3 = pow(10, a3_func[0] * log10(R_FSR_a3) + a3_func[1] / R_FSR_a3 + a3_func[2]);
+	// float Mass_c3 = pow(10, c3_func[0] * log10(R_FSR_c3) + c3_func[1] / R_FSR_c3 + c3_func[2]);
+
+	// float Mass_e1 = pow(10, e1_func[0] * log10(R_FSR_e1) + e1_func[1] / R_FSR_e1 + e1_func[2]);
+	// float Mass_g3 = pow(10, g3_func[0] * log10(R_FSR_g3) + g3_func[1] / R_FSR_g3 + g3_func[2]);
+
+	// //divided by 1000, from g to kg
+	// leftfoot_mass = (Mass_c3 + Mass_a3) / 1000;
+	// rightfoot_mass = (Mass_g3 + Mass_e1) / 1000;
+	// //   return leftfoot_mass, rightfoot_mass;
 }
 //.....................
 
@@ -171,21 +202,26 @@ public:
 		 {0, -1, 0},
 		 {1, 0, 0}};
 
-	float imu_transform[3][3] = {0};
-	float robot_transform[3][3] = {0};
-	float Rw_r[3][3] = {0};
-	float Rw_r1[3][3] = {0};
-	float Rw_r2[3][3] = {0};
+	double imu_transform[3][3];
+	float Rw_r[3][3];
+	float Rw_r1[3][3];
+	float Rw_r2[3][3];
 
-	float acc[3], angular_vel[3], euler_angle[3] = {0}, magnetic_field[3];
+	float acc[3];
+	float angular_vel[3];
+	float euler_angle[3];
+	float magnetic_field[3];
+	float quat[4];
 
-	Serial serial{"/dev/ttyUSB0"};
+	// Serial serial{"/dev/ttyUSB0"};
+	Serial serial{"/dev/ttyTHS1"};
+
 
 	bool RUNNING = true;
 
 	IMU()
 	{
-		serial.uartSet(460800, 8, 'N', 1); //set baudrate,...
+		serial.uartSet(921600, 8, 'N', 1); //set baudrate,...
 	}
 
 	void ParseData(char chr)
@@ -215,26 +251,31 @@ public:
 		{
 		case 0x51:
 			for (i = 0; i < 3; i++)
-				acc[i] = (float)sData[i] / 32768.0 * 16.0;
-			time(&now);
-			//printf("\r\nT:%s acc:%6.3f %6.3f %6.3f ", asctime(localtime(&now)), acc[0],
-			//acc[1], acc[2]);
+				acc[i] = (float)sData[i]  * (16.0 / 32768.0);
+			// time(&now);
+			// printf("\r\nT:%s acc:%6.3f %6.3f %6.3f ", asctime(localtime(&now)), acc[0],acc[1], acc[2]);
 			break;
 		case 0x52:
 			for (i = 0; i < 3; i++)
-				angular_vel[i] = (float)sData[i] / 32768.0 * 2000.0;
+				angular_vel[i] = (float)sData[i]  * (2000.0 / 32768.0);
 			//printf("angular_vel:%7.3f %7.3f %7.3f ", angular_vel[0], angular_vel[1], angular_vel[2]);
 			break;
 		case 0x53:
 			for (i = 0; i < 3; i++)
 				// euler_angle[i] = (float)sData[i] / 32768.0 * 180.0; // in deg
-				euler_angle[i] = (float)sData[i] / 32768.0 * M_PI; // in rad
+				euler_angle[i] = (float)sData[i] * (M_PI / 32768.0); // in rad
 			//printf("A:%7.3f %7.3f %7.3f ", euler_angle[0], euler_angle[1], euler_angle[2]);
 			break;
 		case 0x54:
 			for (i = 0; i < 3; i++)
 				magnetic_field[i] = (float)sData[i];
-			//printf("magnetic_field:%4.0f %4.0f %4.0f ", magnetic_field[0], magnetic_field[1], magnetic_field[2]);
+			// printf("magnetic_field:%4.0f %4.0f %4.0f ", magnetic_field[0], magnetic_field[1], magnetic_field[2]);
+			break;
+		case 0x59:
+			for (i=0;i<4;i++){ // q = qw+ qx*i+qy*j+qz*k == q[0]+ q[1]*i+q[2]*j+q[3]*k
+				quat[i] = (float)sData[i]  * (1 / 32768.0);
+			}
+			// printf("quaternion:%4.2f %4.2f %4.2f %4.2f\n", quat[0], quat[1], quat[2], quat[2]);
 			break;
 		}
 		chrCnt = 0;
@@ -250,10 +291,10 @@ public:
 			{
 				ParseData(r_buf[i]);
 			}
-
-			eulerTomatrix(euler_angle[2], euler_angle[1], euler_angle[0], imu_transform);
-			matrix_dot(R_imuinverse, imu_transform, Rw_r1);
-			matrix_dot(Rw_r1, R, Rw_r);
+			// eulerToRotationMatrix(euler_angle[0], euler_angle[1], euler_angle[2], imu_transform);
+			quaternionToRotationMatrix(quat[0],quat[1],quat[2],quat[3],imu_transform);
+			// matrixDot(R_imuinverse, imu_transform, Rw_r1);
+			// matrixDot(Rw_r1, R, Rw_r);
 		}
 		serial.close();
 	}
@@ -320,10 +361,10 @@ int main()
 	Teensycomm_struct_t msg_from_teensy; // A data struct received from Teensy
 	Jetson_comm_struct_t msg_to_teensy;	 // A data struct sent to Teensy
 
+	// TODO: THIS MAY NOT BE NEEDED
 	// Initialize corresponding data structure
 	for (int i = 0; i < MOTOR_NUM; ++i)
 		desired_pos[i] = 0.0;
-	motor_mode = 0; // 0:position control
 
 	UdpReceiver udp_receiver;
 	std::thread recv_thread(&UdpReceiver::run, &udp_receiver); // udp receiving in a separate thread
@@ -360,16 +401,13 @@ int main()
 		if (udp_receiver.msg_queue.size() > 0)
 		{
 			MsgFromPC recv = udp_receiver.msg_queue.front();
+
+
 			for (int i = 0; i < MOTOR_NUM; i++)
 			{
-				desired_pos[i] = recv.robot_command[i];
+				msg_to_teensy.comd[i] = recv.robot_command[i];
 			}
-			motor_mode = recv.motor_mode;
-
-			// Update output data structue
-			for (int i = 0; i < MOTOR_NUM; i++)
-				msg_to_teensy.comd[i] = desired_pos[i];
-			msg_to_teensy.motor_mode = motor_mode;
+			msg_to_teensy.header = recv.header;
 			// send to teensy
 			teensy_serial.sendStruct(msg_to_teensy);
 		}
@@ -385,7 +423,6 @@ int main()
 			std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 		data_send.timestamps = milliseconds_since_epoch;
 
-		MsgFromPC recv = udp_receiver.msg_queue.front();
 		for (int j = 0; j < MOTOR_NUM; ++j)
 		{
 			// // Angle of motors:
@@ -406,6 +443,7 @@ int main()
 			data_send.gyr[i] = imu.angular_vel[i];
 			data_send.euler[i] = imu.euler_angle[i];
 		}
+
 		//std::cout<<data_send.joint_cur[2]<<'\n';
 
 		data_send.orientation[0] = imu.Rw_r[0][0];
@@ -415,26 +453,32 @@ int main()
 		data_send.orientation[4] = imu.Rw_r[1][1];
 		data_send.orientation[5] = imu.Rw_r[1][2];
 
-		//std::cout<<imu.euler_angle[0]<<","<<imu.euler_angle[1]<<","<<imu.euler_angle[2]<<'\n';
+		// std::cout<<imu.euler_angle[0]<<","<<imu.euler_angle[1]<<","<<imu.euler_angle[2]<<'\n';
 
 		// std::cout<<imu.imu_transform[0][0]<<" "<<imu.imu_transform[0][1]<<" "<<imu.imu_transform[0][2]<<'\n';
 		// std::cout<<imu.imu_transform[1][0]<<" "<<imu.imu_transform[1][1]<<" "<<imu.imu_transform[1][2]<<'\n';
 		// std::cout<<imu.imu_transform[2][0]<<" "<<imu.imu_transform[2][1]<<" "<<imu.imu_transform[2][2]<<'\n';
+		// std::cout<<"\n";
 
 		// std::cout<<imu.Rw_r[0][0]<<" "<<imu.Rw_r[0][1]<<" "<<imu.Rw_r[0][2]<<'\n';
 		// std::cout<<imu.Rw_r[1][0]<<" "<<imu.Rw_r[1][1]<<" "<<imu.Rw_r[1][2]<<'\n';
 		// std::cout<<imu.Rw_r[2][0]<<" "<<imu.Rw_r[2][1]<<" "<<imu.Rw_r[2][2]<<'\n';
 
-		// Foot sensor data process............
-		convert_4voltages_to_mass(msg_from_teensy.foot_force[0], msg_from_teensy.foot_force[2], msg_from_teensy.foot_force[1], msg_from_teensy.foot_force[3]);
-		// on/off contact switch
-		data_send.foot_force[0] = leftfoot_mass > 0.5 ? 1 : 0;
-		data_send.foot_force[1] = rightfoot_mass > 0.5 ? 1 : 0;
 
-		// std::cout<<data_send.foot_force[0]<<" "<<data_send.foot_force[1]<<std::endl;
+		// Foot sensor data process............
+		convert_4voltages_to_mass(msg_from_teensy.foot_force);
+		// on/off contact switch
 		// data_send.foot_force[0]=leftfoot_mass;
 		// data_send.foot_force[1]=rightfoot_mass;
-		// std::cout<<comm.foot_force[0]<<" "<<comm.foot_force[2]<<" "<<comm.foot_force[1]<<" "<<comm.foot_force[3]<<'\n';
+		data_send.foot_force[0] = leftfoot_mass > 0.5 ? 1 : 0;
+		data_send.foot_force[1] = rightfoot_mass > 0.5 ? 1 : 0;
+		
+		
+		// for(int i=0;i<4;++i){
+		// 	std::cout<<msg_from_teensy.foot_force[i]<<" ";
+		// }
+		// std::cout<<std::endl;
+		// std::cout<<data_send.foot_force[0]<<" "<<data_send.foot_force[1]<<std::endl;
 		// std::cout<<leftfoot_mass<<" "<<rightfoot_mass<<'\n';
 		//.................
 

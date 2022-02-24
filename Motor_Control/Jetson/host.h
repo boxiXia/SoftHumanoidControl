@@ -1,25 +1,53 @@
 #ifndef __HOST_H
 #define __HOST_H
 
-/*convert euler (roll,pitch,yaw) in rad to rotation matrix */
-void eulerTomatrix(float& w, float& v, float& u,float rt_mat[3][3]){
-	rt_mat[0][0]=cos(v)*cos(w);
-	rt_mat[1][0]=sin(w)*cos(v);
-	rt_mat[2][0]=-sin(v);
-	rt_mat[0][1]=-sin(w)*cos(u)+cos(w)*sin(u)*sin(v);
-	rt_mat[1][1]=cos(u)*cos(w)+sin(u)*sin(v)*sin(w);
-	rt_mat[2][1]=cos(v)*sin(u);
-	rt_mat[0][2]=sin(u)*sin(w)+cos(u)*sin(v)*cos(w);
-	rt_mat[1][2]=-cos(w)*sin(u)+sin(w)*sin(v)*cos(u);
-	rt_mat[2][2]=cos(u)*cos(v);
+/*
+  z-y-x sequence,i.e first rotate about local z, then rotate about local y, 
+  finally rotate about local x, equivalent to (python):
+  from scipy.spatial.transform import Rotation as R
+  R.from_euler('xyz',(rx,ry,rz),degrees = True).as_matrix()
+*/
+template <typename T1,typename T2>
+void eulerToRotationMatrix(const T1&rx,const T1& ry,const T1& rz,T2 m[3][3]){
+    T2 c0 = cos(rx);
+    T2 c1 = cos(ry);
+    T2 c2 = cos(rz);
+    T2 s0 = sin(rx);
+    T2 s1 = sin(ry);
+    T2 s2 = sin(rz);
+    m[0][0] = c1*c2; m[0][1] = s1*c2*s0-c0*s2; m[0][2] = s0*s2+c0*s1*c2;
+    m[1][0] = c1*s2; m[1][1] = s0*s1*s2+c0*c2; m[1][2] = c0*s1*s2-s0*c2;
+    m[2][0] = -s1;   m[2][1] = s0*c1;          m[2][2] = c0*c1;
 }
 
-void matrix_dot(const float A[3][3], const float B[3][3], float C[3][3]){
+/*q = qx*i+qy*j+qz*k+qw*/
+template <typename T1,typename T2>
+void quaternionToRotationMatrix(const T1& qw,const T1& qx,const T1& qy,const T1& qz,T2 m[3][3]){
+    T2 xx = qx*qx;
+    T2 yy = qy*qy;
+    T2 zz = qz*qz;
+    T2 ww = qw*qw;
+    T2 xy = qx*qy;
+    T2 xz = qx*qz;
+    T2 xw = qx*qw;
+    T2 yz = qy*qz;
+    T2 yw = qy*qw;
+    T2 zw = qz*qw;
+    T2 s2 = 2./(xx + yy + zz + ww);
+
+    m[0][0] = 1-s2*(yy+zz); m[0][1] = s2*(xy-zw);   m[0][2] = s2*(xz+yw);
+    m[1][0] = s2*(xy+zw);   m[1][1] = 1-s2*(xx+zz); m[1][2] = s2*(yz-xw);
+    m[2][0] = s2*(xz-yw);   m[2][1] = s2*(yz+xw);   m[2][2] = 1-s2*(xx+yy);
+
+}
+
+template <typename T>
+void matrixDot(const T A[3][3], const T B[3][3], T C[3][3]){
 	for (int i = 0; i < 3; i++){
 		for (int j = 0; j < 3; j++){
-			float sum = 0;
+			T sum = 0;
 			for (int m = 0; m < 3; m++){
-				sum = sum + A[i][m] * B[m][j];
+				sum += A[i][m] * B[m][j];
 			}
 			C[i][j] = sum;
 		}
@@ -205,7 +233,7 @@ int sendStruct(DataStruct data){
 
 template <class DataStruct>
 void recvStruct(DataStruct& data){
-	int res = 0;
+	uint res = 0;
 	int ret;
   // DataStruct data;  // A data struct received from Teensy
   uint8_t *pt_in = (uint8_t *)(&data);
