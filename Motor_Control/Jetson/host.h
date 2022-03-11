@@ -1,6 +1,23 @@
 #ifndef __HOST_H
 #define __HOST_H
 
+#define _USE_MATH_DEFINES
+#include <math.h>
+
+#include <fcntl.h>
+#include <termios.h>
+#include <string.h>
+#include <unistd.h>
+#include <time.h>
+#include <dirent.h>
+#include <iostream>
+#include <linux/input.h>
+#include <msgpack.hpp>
+#include <thread>
+#include <deque>
+#include <chrono>
+#include "host.h"
+#include <fstream>
 /*
   z-y-x sequence,i.e first rotate about local z, then rotate about local y, 
   finally rotate about local x, equivalent to (python):
@@ -38,7 +55,6 @@ void quaternionToRotationMatrix(const T1& qw,const T1& qx,const T1& qy,const T1&
     m[0][0] = 1-s2*(yy+zz); m[0][1] = s2*(xy-zw);   m[0][2] = s2*(xz+yw);
     m[1][0] = s2*(xy+zw);   m[1][1] = 1-s2*(xx+zz); m[1][2] = s2*(yz-xw);
     m[2][0] = s2*(xz-yw);   m[2][1] = s2*(yz+xw);   m[2][2] = 1-s2*(xx+yy);
-
 }
 
 template <typename T>
@@ -52,6 +68,64 @@ void matrixDot(const T A[3][3], const T B[3][3], T C[3][3]){
 			C[i][j] = sum;
 		}
 	}
+}
+
+void matrixDotvector(double A[3][3], float B[3], float C[3]){
+	for (int i = 0; i < 3; i++){
+    double sum = 0;
+		for (int j = 0; j < 3; j++){
+				sum += A[i][j] * B[j];
+		}
+    C[i] = sum;
+	}
+}
+
+
+void findInverse(double minv[3][3], double m[3][3]){
+  double invdet = 1/(m[0][0] * (m[1][1] * m[2][2] - m[2][1] * m[1][2]) -
+             m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+             m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]));
+  minv[0][0] = (m[1][1] * m[2][2] - m[2][1] * m[1][2]) * invdet;
+  minv[0][1] = (m[0][2] * m[2][1] - m[0][1] * m[2][2]) * invdet;
+  minv[0][2] = (m[0][1] * m[1][2] - m[0][2] * m[1][1]) * invdet;
+  minv[1][0] = (m[1][2] * m[2][0] - m[1][0] * m[2][2]) * invdet;
+  minv[1][1] = (m[0][0] * m[2][2] - m[0][2] * m[2][0]) * invdet;
+  minv[1][2] = (m[1][0] * m[0][2] - m[0][0] * m[1][2]) * invdet;
+  minv[2][0] = (m[1][0] * m[2][1] - m[2][0] * m[1][1]) * invdet;
+  minv[2][1] = (m[2][0] * m[0][1] - m[0][0] * m[2][1]) * invdet;
+  minv[2][2] = (m[0][0] * m[1][1] - m[1][0] * m[0][1]) * invdet;
+}
+
+template <typename T>
+void printMatrix(T m[3][3]){
+  std::cout<<"\n";
+	std::cout<<"[["<<m[0][0]<<","<<m[0][1]<<","<<m[0][2]<<"],\n";
+	std::cout<<" ["<<m[1][0]<<","<<m[1][1]<<","<<m[1][2]<<"],\n";
+	std::cout<<" ["<<m[2][0]<<","<<m[2][1]<<","<<m[2][2]<<"]]\n";
+	std::cout<<"\n";
+}
+
+
+void readMatrix(double A[3][3],std::string path){
+  std:: ifstream f;
+  f.open(path);
+  for (int i = 0; i < 3; i++)
+    for (int j = 0; j < 3; j++)
+      f >> A[i][j];
+  f.close();
+}
+
+void writeMatrix(double A[3][3], std::string path){
+  std:: ofstream f;
+  f.open(path);
+  printf("writing matrix\n");
+  for (int i = 0; i < 3; i++){
+    for (int j = 0; j < 3; j++){
+    f << A[i][j];
+    f << " ";
+    }
+  }
+  f.close();
 }
 
 

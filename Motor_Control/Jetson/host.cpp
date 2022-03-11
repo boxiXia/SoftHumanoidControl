@@ -23,22 +23,8 @@ To run manually:
 To connect the serial IMU, refer to:https://www.jetsonhacks.com/2019/10/10/jetson-nano-uart/
 */
 /*******************************************/
-#define _USE_MATH_DEFINES
-#include <math.h>
-
-#include <fcntl.h>
-#include <termios.h>
-#include <string.h>
-#include <unistd.h>
-#include <time.h>
-#include <dirent.h>
-#include <iostream>
-#include <linux/input.h>
-#include <msgpack.hpp>
-#include <thread>
-#include <deque>
-#include <chrono>
 #include "host.h"
+
 
 constexpr int JETSON_PORT = 32004;
 constexpr int PC_PORT = 32005;
@@ -71,7 +57,7 @@ typedef struct
 typedef struct
 {
 	u_int16_t header;
-	float comd[MOTOR_NUM]; // Desired Speed, rad/s
+	float comd[MOTOR_NUM]; // Desired pos, rad
 } Jetson_comm_struct_t;
 
 
@@ -91,47 +77,36 @@ class DataSend
 {
 public:
 	// float timestamps;
+	int header = 114514;
 	unsigned long timestamps;
 	float joint_pos[MOTOR_NUM * 2]; // Rotation angle, unit rad
 	float joint_vel[MOTOR_NUM];		// Rotation speed, unit rad/s
 	float joint_cur[MOTOR_NUM];
 	float orientation[6];
 	float acc[3]; // Acceleration of IMU, unit m/s^2
-	float gyr[3]; // Gyroscope, unit deg/s
-	float mag[3];
-	float euler[3];
+	float angular_vel[3]; // Gyroscope, unit rad/s
+	// float euler[3];
 	float foot_force[2];
 	MSGPACK_DEFINE_ARRAY(
+		header,
 		timestamps,   // 0
 		joint_pos,    // 1
 		joint_vel,    // 2
 		joint_cur,    // 3
 		orientation,  // 4
-		gyr,          // 5
+		angular_vel,  // 5
 		acc,          // 6
-		euler,        // 7
-		foot_force    // 8
+		foot_force    // 7
 		); 
 };
 
-class MsgToPC
-{
-public:
-	int header = 114514;
-	DataSend data[SEND_SIZE];
-	MSGPACK_DEFINE_ARRAY(header, data);
-};
-// set a object for sending UDP through msgpack
-MsgToPC msg_to_pc;
-DataSend data_send;
-std::deque<DataSend> send_buf;
+
 
 
 // foot sensor ............
 
 constexpr float a3_func[3] = {-0.3781, 0.0197, 3.0990}; //left_forefoot 
 constexpr float c3_func[3] = {-0.4079, 0.0269, 2.9743}; //left_backheel
-
 constexpr float e1_func[3] = {-0.3057, 0.0272, 3.1222}; //right_forefoot
 constexpr float g3_func[3] = {-0.4278, 0.0167, 3.0961}; //right_backheel
 
@@ -145,13 +120,14 @@ constexpr float fsr_coeff[SENSOR_PIN_NUM][3] = {
 	{-0.4278, 0.0167, 3.0961} //g3, right_backheel
 };
 
+
 float R_FSR[SENSOR_PIN_NUM];
 float measured_mass[SENSOR_PIN_NUM];
 constexpr float R_0 = 7.44;			// known resistor value in [Kohms]
 float leftfoot_mass;	//the mass on left foot
 float rightfoot_mass; //the mass on right foot
 //foot sensor...............
-void convert_4voltages_to_mass(int16_t v[])//, float v1, float v2, float v3, float v4) //v1:16; v2:17; v3:20; v4:21
+void convert_4voltages_to_mass(int16_t v[])
 {
 
 	for(int i=0;i<SENSOR_PIN_NUM;++i){
@@ -160,54 +136,64 @@ void convert_4voltages_to_mass(int16_t v[])//, float v1, float v2, float v3, flo
 	}
 	leftfoot_mass = (measured_mass[0] + measured_mass[1]) / 1000;
 	rightfoot_mass = (measured_mass[2] + measured_mass[3]) / 1000;
-
-	// float R_FSR_a3 = R_0 * v4 / (1023 - v4);
-	// float R_FSR_c3 = R_0 * v1 / (1023 - v1);
-
-	// float R_FSR_e1 = R_0 * v3 / (1023 - v3);
-	// float R_FSR_g3 = R_0 * v2 / (1023 - v2);
-	
-	// float Mass_a3 = pow(10, a3_func[0] * log10(R_FSR_a3) + a3_func[1] / R_FSR_a3 + a3_func[2]);
-	// float Mass_c3 = pow(10, c3_func[0] * log10(R_FSR_c3) + c3_func[1] / R_FSR_c3 + c3_func[2]);
-
-	// float Mass_e1 = pow(10, e1_func[0] * log10(R_FSR_e1) + e1_func[1] / R_FSR_e1 + e1_func[2]);
-	// float Mass_g3 = pow(10, g3_func[0] * log10(R_FSR_g3) + g3_func[1] / R_FSR_g3 + g3_func[2]);
-
-	// //divided by 1000, from g to kg
-	// leftfoot_mass = (Mass_c3 + Mass_a3) / 1000;
-	// rightfoot_mass = (Mass_g3 + Mass_e1) / 1000;
-	// //   return leftfoot_mass, rightfoot_mass;
 }
-//.....................
 
-// struct IMU_DATA
-// {
-// 	float acc[3];
-// 	float angular_vel[3];
-// 	float euler_angle[3];
-// 	float magnetic_field[3];
-// };
+
 
 class IMU
 {
 public:
-	// orientation calculation
-	float R_imuinverse[3][3] =
-		{{-0.8196347, -0.57279632, 0.01016245},
-		 {0.57281627, -0.81968272, -0.00105455},
-		 {0.00893399, 0.00495684, 0.99994761}};
 
-	float R[3][3] =
-		{{0, 0, 1},
-		 {0, -1, 0},
-		 {1, 0, 0}};
+	
+	
+	// absolute world coordinate:w0
+	// a fixed world coordinate we are interested in: w1
+	// robot coordinate: rob
+	// imu coordinate: imu
+	// imu measures the transform of imu coordinate relative 
+	// to the abs world coordinate, i.e. r_w0_imu
+	// we want to find the robot transform relative to the fixed
+	// coordinate w1, i.e. r_w1_rob
+	// r_w1_imu = r_w1_w0 @ r_w0_imu
+	// calibration: 
+	// to find out r_w1_w0, we calibrate the imu at certain pose,
+	// suppose we know imu transform relative to coordate w1 (r_w1_imu)
+	// imu measures its transform relative to coordinate w0, (r_w0_imu)
+	// r_w1_w0 = r_w1_imu @ (r_w0_imu^-1)
+	// robot transform relative to imu is known: r_imu_rob
+	// final matrix: r_w1_rob =  r_w1_imu @ r_imu_rob
+	//                        =  r_w1_w0 @ r_w0_imu @ r_imu_rob
 
-	double imu_transform[3][3];
-	float Rw_r[3][3];
-	float Rw_r1[3][3];
-	float Rw_r2[3][3];
+	// imu transform relative to the w1 coordiate at calibartion
+	double r_w1_imu_at_calibartion[3][3] = {
+		{1,0,0},
+		{0,1,0},
+		{0,0,1}
+		}; 
 
-	float acc[3];
+	double r_w1_imu[3][3];
+	double r_imu_w1[3][3];
+
+	// transform from imu to robot
+	double r_imu_rob[3][3] = { 
+		{0, 0, 1},
+		{0, -1, 0},
+		{1, 0, 0}};
+
+	// transform from w1 to w0
+	double r_w1_w0[3][3]; 
+	
+	// transform from w1 to robot (this is what we are insterested in)
+	double r_w1_rob[3][3];
+
+	double r_w0_imu[3][3];
+
+private:
+	float _acc[3];
+	float _angular_vel[3];
+public:
+	float acc[3]; // acceleration expressed at w1, gravity subtracted
+
 	float angular_vel[3];
 	float euler_angle[3];
 	float magnetic_field[3];
@@ -216,12 +202,12 @@ public:
 	// Serial serial{"/dev/ttyUSB0"};
 	Serial serial{"/dev/ttyTHS1"};
 
-
+	bool flag_should_calibarte = false; // calibarte when this flag is true
 	bool RUNNING = true;
 
 	IMU()
 	{
-		serial.uartSet(921600, 8, 'N', 1); //set baudrate,...
+		serial.uartSet(460800, 8, 'N', 1); //set baudrate,...
 	}
 
 	void ParseData(char chr)
@@ -251,13 +237,13 @@ public:
 		{
 		case 0x51:
 			for (i = 0; i < 3; i++)
-				acc[i] = (float)sData[i]  * (16.0 / 32768.0);
+				_acc[i] = -(float)sData[i]  * (9.8* 16.0 / 32768.0);
 			// time(&now);
-			// printf("\r\nT:%s acc:%6.3f %6.3f %6.3f ", asctime(localtime(&now)), acc[0],acc[1], acc[2]);
+			// printf("\r\nT:%s _acc:%6.3f %6.3f %6.3f ", asctime(localtime(&now)), _acc[0],_acc[1], _acc[2]);
 			break;
 		case 0x52:
 			for (i = 0; i < 3; i++)
-				angular_vel[i] = (float)sData[i]  * (2000.0 / 32768.0);
+				_angular_vel[i] = (float)sData[i]  * (2000.0* M_PI/180. / 32768.0);
 			//printf("angular_vel:%7.3f %7.3f %7.3f ", angular_vel[0], angular_vel[1], angular_vel[2]);
 			break;
 		case 0x53:
@@ -283,18 +269,66 @@ public:
 
 	void run()
 	{
+		// read matrix from file
+		readMatrix(r_w1_w0,"./matrix.txt");
+
 		char r_buf[1024];
 		while (RUNNING)
 		{
-			ret = serial.recv(r_buf, 44); // 4 group of 11 bytes
+			ret = serial.recv(r_buf, 33); // 4 group of 11 bytes
 			for (int i = 0; i < ret; i++)
 			{
 				ParseData(r_buf[i]);
 			}
-			// eulerToRotationMatrix(euler_angle[0], euler_angle[1], euler_angle[2], imu_transform);
-			quaternionToRotationMatrix(quat[0],quat[1],quat[2],quat[3],imu_transform);
-			// matrixDot(R_imuinverse, imu_transform, Rw_r1);
-			// matrixDot(Rw_r1, R, Rw_r);
+			// eulerToRotationMatrix(euler_angle[0], euler_angle[1], euler_angle[2], r_w0_imu);
+			quaternionToRotationMatrix(quat[0],quat[1],quat[2],quat[3],r_w0_imu); // DO CONVERSION
+
+			if(flag_should_calibarte){
+				//do calibaration
+				double r_w0_imu_inv[3][3];
+
+				// printf("r_w0_imu");
+				// printMatrix(r_w0_imu);
+
+				findInverse(r_w0_imu_inv, r_w0_imu);
+
+				// printf("r_w0_imu_inv");
+				// printMatrix(r_w0_imu_inv);
+
+				// printf("r_w1_imu_at_calibartion");
+				// printMatrix(r_w1_imu_at_calibartion);
+				
+				matrixDot(r_w1_imu_at_calibartion,r_w0_imu_inv,r_w1_w0);
+
+				// printf("r_w1_w0");
+				// printMatrix(r_w1_w0);
+
+				// printMatrix(r_w1_w0);
+  				writeMatrix(r_w1_w0,"./matrix.txt");
+				flag_should_calibarte = false;
+
+				// matrixDot(r_w1_w0,r_w0_imu,r_w1_imu);
+				// matrixDot(r_w1_imu,r_imu_rob,r_w1_rob);
+				// printMatrix(r_w1_rob);
+			}
+			matrixDot(r_w1_w0,r_w0_imu,r_w1_imu);
+
+			// compute robot transform relative to w1
+			matrixDot(r_w1_imu,r_imu_rob,r_w1_rob); 
+
+
+			findInverse(r_imu_w1, r_w1_imu);//compute r_imu_w1
+			
+
+			// Calculate acceleration, gravity subtracted
+			matrixDotvector(r_imu_w1,_acc,acc);
+			acc[2]=acc[2]+9.8;
+
+
+
+			// Calculate angular velociety, robot 
+			matrixDotvector(r_imu_rob,_angular_vel,angular_vel);
+
 		}
 		serial.close();
 	}
@@ -335,6 +369,8 @@ public:
 				msgpack::object obj = oh.get();
 				obj.convert(recv);
 				msg_queue.push_front(recv);
+
+				// printf("%d",recv.header);
 				while (msg_queue.size() > 1)
 				{
 					msg_queue.pop_back();
@@ -395,13 +431,25 @@ int main()
 	Serial teensy_serial{"/dev/ttyACM0"};
 	teensy_serial.uartSet(1000000, 8, 'N', 1);
 
+
+	DataSend msg_to_pc[SEND_SIZE];
+	DataSend data_send;
+	std::deque<DataSend> send_buf;
+
 	/******************************************************************/
 	while (1)
 	{
 		if (udp_receiver.msg_queue.size() > 0)
 		{
 			MsgFromPC recv = udp_receiver.msg_queue.front();
+			
+			udp_receiver.msg_queue.pop_front();
 
+			//quaternionToRotationMatrix(quat[0],quat[1],quat[2],quat[3],r_w0_imu);
+			if (recv.header==10002){
+				imu.flag_should_calibarte = true;
+				printf("REQUESTED IMU RESET\n");
+			}
 
 			for (int i = 0; i < MOTOR_NUM; i++)
 			{
@@ -411,7 +459,8 @@ int main()
 			// send to teensy
 			teensy_serial.sendStruct(msg_to_teensy);
 		}
-
+		
+		//std::cout<<imu.euler[0]<<std::endl;
 		// receive from teensy
 		teensy_serial.recvStruct(msg_from_teensy);
 		//std::cout<<"reached2"<<'\n';
@@ -440,29 +489,26 @@ int main()
 		{
 			// msg_to_pc.mag[i] = comm->mag[i];
 			data_send.acc[i] = imu.acc[i];
-			data_send.gyr[i] = imu.angular_vel[i];
-			data_send.euler[i] = imu.euler_angle[i];
+			data_send.angular_vel[i] = imu.angular_vel[i];
 		}
 
 		//std::cout<<data_send.joint_cur[2]<<'\n';
 
-		data_send.orientation[0] = imu.Rw_r[0][0];
-		data_send.orientation[1] = imu.Rw_r[0][1];
-		data_send.orientation[2] = imu.Rw_r[0][2];
-		data_send.orientation[3] = imu.Rw_r[1][0];
-		data_send.orientation[4] = imu.Rw_r[1][1];
-		data_send.orientation[5] = imu.Rw_r[1][2];
+		data_send.orientation[0] = imu.r_w1_rob[0][0];
+		data_send.orientation[1] = imu.r_w1_rob[1][0];
+		data_send.orientation[2] = imu.r_w1_rob[2][0];
+		data_send.orientation[3] = imu.r_w1_rob[0][1];
+		data_send.orientation[4] = imu.r_w1_rob[1][1];
+		data_send.orientation[5] = imu.r_w1_rob[2][1];
 
-		// std::cout<<imu.euler_angle[0]<<","<<imu.euler_angle[1]<<","<<imu.euler_angle[2]<<'\n';
+		// std::cout<<imu._angular_vel[0]<<","<<imu._angular_vel[1]<<","<<imu._angular_vel[2];//<<'\n';
+		// std::cout<<imu.angular_vel[0]<<","<<imu.angular_vel[1]<<","<<imu.angular_vel[2]<<'\n';
+		// std::cout<<imu.acc[0]<<","<<imu.acc[1]<<","<<imu.acc[2];//<<'\n';
+		// std::cout<<imu.acc[0]<<","<<imu.acc[1]<<","<<imu.acc[2]<<'\n';
 
-		// std::cout<<imu.imu_transform[0][0]<<" "<<imu.imu_transform[0][1]<<" "<<imu.imu_transform[0][2]<<'\n';
-		// std::cout<<imu.imu_transform[1][0]<<" "<<imu.imu_transform[1][1]<<" "<<imu.imu_transform[1][2]<<'\n';
-		// std::cout<<imu.imu_transform[2][0]<<" "<<imu.imu_transform[2][1]<<" "<<imu.imu_transform[2][2]<<'\n';
-		// std::cout<<"\n";
-
-		// std::cout<<imu.Rw_r[0][0]<<" "<<imu.Rw_r[0][1]<<" "<<imu.Rw_r[0][2]<<'\n';
-		// std::cout<<imu.Rw_r[1][0]<<" "<<imu.Rw_r[1][1]<<" "<<imu.Rw_r[1][2]<<'\n';
-		// std::cout<<imu.Rw_r[2][0]<<" "<<imu.Rw_r[2][1]<<" "<<imu.Rw_r[2][2]<<'\n';
+		// printMatrix(imu.r_w0_imu);
+		// printMatrix(imu.r_w1_imu);
+		// printMatrix(imu.r_w1_imu);
 
 
 		// Foot sensor data process............
@@ -493,7 +539,7 @@ int main()
 		{
 			for (int i = 0; i < SEND_SIZE; i++)
 			{
-				msg_to_pc.data[i] = send_buf[i * STEP_SIZE];
+				msg_to_pc[i] = send_buf[i * STEP_SIZE];
 			}
 
 			std::stringstream send_stream;
