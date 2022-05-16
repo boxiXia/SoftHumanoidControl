@@ -81,22 +81,25 @@ public:
 	unsigned long timestamps;
 	float joint_pos[MOTOR_NUM * 2]; // Rotation angle, unit rad
 	float joint_vel[MOTOR_NUM];		// Rotation speed, unit rad/s
-	float joint_cur[MOTOR_NUM];
+	float joint_torque[MOTOR_NUM];
 	float orientation[6];
-	float acc[3]; // Acceleration of IMU, unit m/s^2
 	float angular_vel[3]; // Gyroscope, unit rad/s
-	// float euler[3];
-	float foot_force[2];
+	float com_acc[3]; // Acceleration of IMU, unit m/s^2
+	float com_vel[3]; // center of mass velocity [m/s], placeholder variable here
+	float com_pos[3]; // center of mass pos [m], placeholder variable
+	float constraint[13]; // #of body 12+1
 	MSGPACK_DEFINE_ARRAY(
-		header,
-		timestamps,   // 0
-		joint_pos,    // 1
-		joint_vel,    // 2
-		joint_cur,    // 3
-		orientation,  // 4
-		angular_vel,  // 5
-		acc,          // 6
-		foot_force    // 7
+		header,       // 0
+		timestamps,   // 1
+		joint_pos,    // 2
+		joint_vel,    // 3
+		joint_torque, // 4
+		orientation,  // 5
+		angular_vel,  // 6
+		com_acc,      // 7
+		com_vel,      // 8
+		com_pos,      // 9
+		constraint    // 10
 		); 
 };
 
@@ -176,8 +179,8 @@ public:
 
 	// transform from imu to robot
 	double r_imu_rob[3][3] = { 
-		{0, 0, 1},
-		{0, -1, 0},
+		{0, 0, -1},
+		{0, 1, 0},
 		{1, 0, 0}};
 
 	// transform from w1 to w0
@@ -199,15 +202,15 @@ public:
 	float magnetic_field[3];
 	float quat[4];
 
-	// Serial serial{"/dev/ttyUSB0"};
-	Serial serial{"/dev/ttyTHS1"};
+	Serial serial{"/dev/ttyUSB0"};
+	// Serial serial{"/dev/ttyTHS1"};
 
 	bool flag_should_calibarte = false; // calibarte when this flag is true
 	bool RUNNING = true;
 
 	IMU()
 	{
-		serial.uartSet(460800, 8, 'N', 1); //set baudrate,...
+		serial.uartSet(921600, 8, 'N', 1); //set baudrate,...
 	}
 
 	void ParseData(char chr)
@@ -282,6 +285,8 @@ public:
 			}
 			// eulerToRotationMatrix(euler_angle[0], euler_angle[1], euler_angle[2], r_w0_imu);
 			quaternionToRotationMatrix(quat[0],quat[1],quat[2],quat[3],r_w0_imu); // DO CONVERSION
+
+			// printMatrix(r_w0_imu);
 
 			if(flag_should_calibarte){
 				//do calibaration
@@ -482,17 +487,17 @@ int main()
 			data_send.joint_pos[j * 2] = std::cos(msg_from_teensy.joint_pos[j]);
 			data_send.joint_pos[j * 2 + 1] = std::sin(msg_from_teensy.joint_pos[j]);
 			// Current of motors:
-			data_send.joint_cur[j] = msg_from_teensy.joint_cur[j] * 9.375;
+			data_send.joint_torque[j] = msg_from_teensy.joint_cur[j] * 9.375;
 		}
 		//std::cout<<comm->joint_cur[1]<<" "<<comm->joint_cur[1]<< " "<<comm->joint_cur[2]<<'\n';
 		for (int i = 0; i < 3; ++i)
 		{
 			// msg_to_pc.mag[i] = comm->mag[i];
-			data_send.acc[i] = imu.acc[i];
+			data_send.com_acc[i] = imu.acc[i];
 			data_send.angular_vel[i] = imu.angular_vel[i];
 		}
 
-		//std::cout<<data_send.joint_cur[2]<<'\n';
+		//std::cout<<data_send.joint_torque[2]<<'\n';
 
 		data_send.orientation[0] = imu.r_w1_rob[0][0];
 		data_send.orientation[1] = imu.r_w1_rob[1][0];
@@ -506,25 +511,23 @@ int main()
 		// std::cout<<imu.acc[0]<<","<<imu.acc[1]<<","<<imu.acc[2];//<<'\n';
 		// std::cout<<imu.acc[0]<<","<<imu.acc[1]<<","<<imu.acc[2]<<'\n';
 
-		// printMatrix(imu.r_w0_imu);
+		// printMatrix(imu.r_imu_rob);
 		// printMatrix(imu.r_w1_imu);
-		// printMatrix(imu.r_w1_imu);
+		// printMatrix(imu.r_w1_rob);
 
 
 		// Foot sensor data process............
 		convert_4voltages_to_mass(msg_from_teensy.foot_force);
 		// on/off contact switch
-		// data_send.foot_force[0]=leftfoot_mass;
-		// data_send.foot_force[1]=rightfoot_mass;
-		data_send.foot_force[0] = leftfoot_mass > 0.5 ? 1 : 0;
-		data_send.foot_force[1] = rightfoot_mass > 0.5 ? 1 : 0;
+		data_send.constraint[9] = leftfoot_mass > 0.5 ? 1 : 0;
+		data_send.constraint[12] = rightfoot_mass > 0.5 ? 1 : 0;
 		
 		
 		// for(int i=0;i<4;++i){
 		// 	std::cout<<msg_from_teensy.foot_force[i]<<" ";
 		// }
 		// std::cout<<std::endl;
-		// std::cout<<data_send.foot_force[0]<<" "<<data_send.foot_force[1]<<std::endl;
+		// std::cout<<data_send.constraint[0]<<" "<<data_send.constraint[1]<<std::endl;
 		// std::cout<<leftfoot_mass<<" "<<rightfoot_mass<<'\n';
 		//.................
 

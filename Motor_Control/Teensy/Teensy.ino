@@ -35,7 +35,7 @@ constexpr float pi = 3.14159265358979323846;
 float joint_lower_limit[MOTOR_NUM] = {-pi/1.25, -pi/2, -pi/2, -pi/1.25, -pi/2, -pi/2, -pi/3,  0,  -pi/3, -pi/3, -pi/2, -pi/3};
 float joint_upper_limit[MOTOR_NUM] = { pi/1.25,  pi/2,  pi/2,  pi/1.25,  pi/2,  pi/2,  pi/3, pi/2, pi/3,  pi/3,  0,     pi/3};
 float joint_axis_direction[MOTOR_NUM] = {1, 1, 1, 1, 1, 1, 1, -1, -1, 1, -1, -1};
-
+//float joint_axis_direction[MOTOR_NUM] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
 Teensycomm_struct_t teensy_comm = {{}, {}, {}, {}, {}}; // For holding data sent to Jetson
 Jetson_comm_struct_t jetson_comm = {{}};                // For holding data received from Jetson
 
@@ -70,6 +70,7 @@ constexpr int sensor_pin[SENSOR_PIN_NUM] = {21,20,17,16};
 bool left_touch = 0;
 bool right_touch = 0;
 constexpr int force_threshold = 128;
+float pos_pre[MOTOR_NUM] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 //................
 
 CAN_message_t msg_recv_arr[MOTOR_NUM];
@@ -97,6 +98,7 @@ void processMotorRotorMultiAngle(int id,uint8_t* buf, bool init_flag=false){
   }
   motor_multi_anlge[id] = rotor_multi_angle/REDUCTION_RATIO;
 }
+
 
 /*get the motor shaft position using the multi-turn encoder position*/
 void getMotorRotorMultiAngle(bool init_flag=false){
@@ -234,7 +236,32 @@ void controlSingleMotor(const int i, float pos_command, const uint16_t max_speed
     clampInplace(pos_command, joint_lower_limit[i], joint_upper_limit[i]);
     // Convert motor shaft position command [rad] to rotor position command [degree]
     pos_command = pos_command * 180.0 / pi * REDUCTION_RATIO * joint_axis_direction[i];
-    int32_t pos = (int32_t)round(pos_command * 100); // 0.01 deg per LSB
+    int32_t pos = (int32_t)round(pos_command * 100); 
+
+    // Swift position control to speed control
+    // float pos_com = pos_command;
+    // float max_vel = 300 / 60. * 2. * pi; // [rad/s] maximum joint speed
+    // float max_acc = max_vel / 1.0; // [rad/s^2] maximum joint acceleration
+    // float d_pos = joint_pos[i] - pos_pre[i];
+    // float ndt = 1/125.; // delta time between jointcontrol update
+    // float vel = d_pos / ndt;
+    // pos_pre[i] = joint_pos[i];
+    // // update cmd with position PD control: clamp to (-max_vel,max_vel)
+    // float dv = max_acc * ndt;
+    // clampPeroidicInplace(pos_com, -pi, pi);
+    // pos_com = pos_com - joint_pos[i]; // position error
+    // clampPeroidicInplace(pos_com, -pi, pi);
+    // float vel_com = 10 * pos_com - 0.1 * vel; // velocity command proxy
+    // clampInplace(vel_com, vel - dv, vel + dv);
+    // clampInplace(vel_com, -max_vel, max_vel);
+    // vel_com = vel_com * 180.0 / pi;
+    // if ((i == 7) || (i == 8) || (i == 10) || (i == 11)){
+    //   pos_com = -pos_com;
+    // };
+    // float vel_com = 0.0;
+    // int32_t pos = (int32_t)round(vel_com * 100); // 0.01 deg per LSB
+
+
     CAN_message_t msg; // For sending data on CAN bus
     msg.buf[0] = 0xA4; // Position control mode with speed limit, refer to motor manual page 13 
     msg.buf[1] = 0x00;
@@ -244,6 +271,14 @@ void controlSingleMotor(const int i, float pos_command, const uint16_t max_speed
     msg.buf[5] = *((uint8_t *)(&pos) + 1);
     msg.buf[6] = *((uint8_t *)(&pos) + 2);
     msg.buf[7] = *((uint8_t *)(&pos) + 3);
+    // msg.buf[0] = 0xA2; // Speed control mode with speed limit, refer to motor manual page 13 
+    // msg.buf[1] = 0x00;
+    // msg.buf[2] = 0x00;
+    // msg.buf[3] = 0x00;
+    // msg.buf[4] = *(uint8_t *)(&pos);
+    // msg.buf[5] = *((uint8_t *)(&pos) + 1);
+    // msg.buf[6] = *((uint8_t *)(&pos) + 2);
+    // msg.buf[7] = *((uint8_t *)(&pos) + 3);
     msg.id = joint_can_addr[i];
     if(i<NUM_PER_CAN){ // from CAN_F
       CAN_F.write(msg);
